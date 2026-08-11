@@ -275,7 +275,7 @@ impl<'a> Ui<'a> {
         selection_metadata: &SelectionMetadata,
         flow: UiFlow,
         scroll_actions: &[ScrollAction],
-        pending_keys: &[KeyChord],
+        pending_keys: &mut Vec<KeyChord>,
         show_help: bool,
     ) -> Result<(FullOutput, Option<u64>)> {
         trace!("painting ui with flow {flow:?}");
@@ -285,6 +285,7 @@ impl<'a> Ui<'a> {
             .iter()
             .position(|(id, _)| *id == *active_id)
             .unwrap_or(0);
+        let original_active_id = *active_id;
 
         if self.prev_active_id != *active_id || self.prev_active_idx != active_idx {
             self.active_source = Some(ActiveSource::External);
@@ -624,6 +625,11 @@ impl<'a> Ui<'a> {
                     .show(ctx, self.config.layout.window_dimensions.into());
             } else {
                 self.help_modal.hide();
+            }
+
+            if original_active_id != *active_id && !pending_keys.is_empty() {
+                debug!("active item changed, clearing pending keys");
+                pending_keys.clear();
             }
 
             if !pending_keys.is_empty() {

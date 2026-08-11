@@ -528,7 +528,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     &selection.metadata,
                     ui_flow,
                     &scroll_actions,
-                    &keymap_action.pending_keys,
+                    &mut keymap_action.pending_keys,
                     mode == AppMode::Help,
                 )?;
 
