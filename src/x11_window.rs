@@ -507,21 +507,26 @@ impl<'a> X11Window<'a> {
             .map(|pm| (pm.x as i32, pm.y as i32, pm.width as i32, pm.height as i32))
             .unwrap_or((0, 0, 0, 0));
 
+        // Keep the clamp range valid: it is empty when the pointer is outside
+        // every monitor or the window is larger than the monitor; i32::clamp
+        // panics on min > max. Fall back to the near screen edge in that case.
+        let min_x = mx + screen_edge_gap;
         let place_right = px + win_width + spacing <= mx + mw - spacing;
         let x = (if place_right {
             px + spacing
         } else {
             px - win_width - spacing
         })
-        .clamp(mx + screen_edge_gap, mx + mw - win_width - screen_edge_gap);
+        .clamp(min_x, (mx + mw - win_width - screen_edge_gap).max(min_x));
 
+        let min_y = my + screen_edge_gap;
         let place_below = py + win_height + spacing <= my + mh - spacing;
         let y = (if place_below {
             py + spacing
         } else {
             py - win_height - spacing
         })
-        .clamp(my + screen_edge_gap, my + mh - win_height - screen_edge_gap);
+        .clamp(min_y, (my + mh - win_height - screen_edge_gap).max(min_y));
 
         (
             x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
