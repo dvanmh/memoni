@@ -967,8 +967,15 @@ impl<'a> Selection<'a> {
         let (key, move_pointer, keycode) = get_input_utils(conn, self.screen, self.key_converter);
         if self.selection_atom == self.atoms.CLIPBOARD {
             let app_paste_keymaps = &self.config.app_paste_keymaps;
-            let keymap = if let Some((instance_name, class_name)) =
-                get_window_class(conn, focused_window)?
+            // Focus may be PointerRoot/None or the window may already be gone;
+            // fall back to the default keymap instead of failing the paste.
+            let window_class = get_window_class(conn, focused_window)
+                .inspect_err(|e| {
+                    warn!("failed to get class of focused window {focused_window}: {e}")
+                })
+                .ok()
+                .flatten();
+            let keymap = if let Some((instance_name, class_name)) = window_class
                 && let Some(keymap) = app_paste_keymaps
                     .get(&instance_name)
                     .or_else(|| app_paste_keymaps.get(&class_name))
