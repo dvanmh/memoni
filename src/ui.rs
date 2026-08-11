@@ -9,9 +9,9 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use egui::{
-    Area, Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId,
-    FontTweak, FullOutput, Order, Painter, RawInput, Rect, RichText, Stroke, TextWrapMode,
-    TextureHandle, TextureOptions, Vec2, WidgetText, epaint, scroll_area::ScrollAreaOutput,
+    Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak,
+    FullOutput, Id, LayerId, Order, Painter, RawInput, Rect, RichText, Stroke, TextureHandle,
+    TextureOptions, Vec2, epaint, scroll_area::ScrollAreaOutput,
 };
 use fontconfig::Fontconfig;
 use image::{GenericImageView, RgbaImage};
@@ -762,30 +762,23 @@ impl<'a> Ui<'a> {
             .join(" ");
 
         let rect = ctx.input(|i| i.content_rect());
-        Area::new("pending_keys_overlay".into())
-            .fixed_pos(rect.min)
-            .order(Order::Foreground)
-            .fade_in(false)
-            .interactable(false)
-            .show(ctx, |ui| {
-                ui.set_min_size(rect.size());
-                let painter = ui.painter();
-                let max_rect = ui.max_rect();
+        let painter = ctx.layer_painter(LayerId::new(
+            Order::Foreground,
+            Id::new("pending_keys_overlay"),
+        ));
 
-                let galley = WidgetText::Text(label.to_string()).into_galley(
-                    ui,
-                    Some(TextWrapMode::Wrap),
-                    max_rect.width() - margin.x * 2.0 - padding.x * 2.0,
-                    FontId::proportional(config.font.pending_keys_text_size),
-                );
+        let galley = painter.layout(
+            label,
+            FontId::proportional(config.font.pending_keys_text_size),
+            fg_color,
+            rect.width() - margin.x * 2.0 - padding.x * 2.0,
+        );
 
-                let galley_pos = max_rect.right_bottom() - margin - padding - galley.size();
-                let bg_rect =
-                    Rect::from_min_size(galley_pos - padding, galley.size() + padding * 2.0);
+        let galley_pos = rect.right_bottom() - margin - padding - galley.size();
+        let bg_rect = Rect::from_min_size(galley_pos - padding, galley.size() + padding * 2.0);
 
-                painter.rect_filled(bg_rect, config.layout.pending_keys_corner_radius, bg_color);
-                painter.galley(galley_pos, galley, fg_color);
-            });
+        painter.rect_filled(bg_rect, config.layout.pending_keys_corner_radius, bg_color);
+        painter.galley(galley_pos, galley, fg_color);
     }
 
     pub fn reset(&mut self) {
