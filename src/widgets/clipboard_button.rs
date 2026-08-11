@@ -294,7 +294,7 @@ impl Widget for ClipboardButton {
                 ui.painter().rect_stroke(
                     preview_rect,
                     CornerRadius::same(self.color_preview_corner_radius),
-                    Stroke::new(1.2, visuals.fg_stroke.color),
+                    Stroke::new(1.2_f32, visuals.fg_stroke.color),
                     StrokeKind::Outside,
                 );
 
