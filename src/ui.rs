@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
     ffi::CString,
-    fs, mem,
+    fs::{self, File},
+    io::Read as _,
+    mem,
     path::{Path, PathBuf},
     str::FromStr as _,
     sync::{Arc, LazyLock},
@@ -1151,7 +1153,7 @@ fn get_file_thumbnail<P: AsRef<Path>>(
 fn get_file_icon_path<P: AsRef<Path>>(file: P) -> Result<Option<PathBuf>> {
     static SMI: LazyLock<SharedMimeInfo> = LazyLock::new(SharedMimeInfo::new);
 
-    let file_data = fs::read(&file)
+    let file_data = read_first_n_bytes(&file, 10 * 1024 * 1024)
         .inspect_err(|e| {
             warn!(
                 "failed to read {:?} to determine a suitable icon, falling back to generic icon: {e}",
@@ -1384,4 +1386,10 @@ fn format_path_str(path: &str) -> String {
     }
 
     s
+}
+
+fn read_first_n_bytes<P: AsRef<Path>>(path: P, n: u64) -> Result<Vec<u8>> {
+    let mut buffer = Vec::new();
+    File::open(path)?.take(n).read_to_end(&mut buffer)?;
+    Ok(buffer)
 }
