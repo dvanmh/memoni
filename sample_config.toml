@@ -128,6 +128,16 @@ pending_keys_corner_radius = 2
 # default: 4
 pin_size = 2
 
+# Shows a small preview square for color values on buttons
+#
+# Supported formats:
+#   #RGB, #RGBA, #RRGGBB, #RRGGBBAA
+#   rgb(r, g, b), rgba(r, g, b, a)
+#   hsl(h, s%, l%), hsla(h, s%, l%, a)
+#
+# default: true
+show_color_preview = false
+
 # Size (px) of the color preview square
 #
 # default: 18

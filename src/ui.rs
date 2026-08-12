@@ -950,7 +950,9 @@ impl<'a> Ui<'a> {
             }
         } else if let Some(text) = text_content {
             btn = btn.label(build_display_text(text, &config.theme));
-            if let Some(color) = parse_color(text) {
+            if config.layout.show_color_preview
+                && let Some(color) = parse_color(text)
+            {
                 btn = btn.color_preview(color);
             }
         } else {
