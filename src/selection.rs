@@ -18,7 +18,7 @@ use bincode::{Decode, Encode};
 use log::{debug, error, info, trace, warn};
 use x11rb::protocol::{
     Event,
-    xfixes::SelectionEventMask,
+    xfixes::{SelectionEvent, SelectionEventMask},
     xproto::{ConnectionExt as _, *},
 };
 use x11rb::wrapper::ConnectionExt as _;
@@ -181,12 +181,10 @@ impl<'a> Selection<'a> {
         conn.extension_information(xfixes::X11_EXTENSION_NAME)?
             .context("XFixes not found")?;
         xfixes::query_version(conn, 5, 0)?.reply()?;
-        xfixes::select_selection_input(
-            conn,
-            root,
-            selection_atom,
-            SelectionEventMask::SET_SELECTION_OWNER,
-        )?;
+        let event_mask = SelectionEventMask::SET_SELECTION_OWNER
+            | SelectionEventMask::SELECTION_WINDOW_DESTROY
+            | SelectionEventMask::SELECTION_CLIENT_CLOSE;
+        xfixes::select_selection_input(conn, root, selection_atom, event_mask)?;
 
         Ok(Selection {
             items: initial_data.0,
@@ -225,25 +223,58 @@ impl<'a> Selection<'a> {
                         break 'blk;
                     }
 
-                    info!("selection notification received from owner {}", ev.owner);
-                    let transfer_window = self.transfer_windows.get()?;
-                    info!("requesting selection with transfer window: {transfer_window:?}");
-                    conn.convert_selection(
-                        transfer_window.id,
-                        ev.selection,
-                        atoms.TARGETS,
-                        transfer_window.atom,
-                        x11rb::CURRENT_TIME,
-                    )?
-                    .check()?;
+                    match ev.subtype {
+                        SelectionEvent::SET_SELECTION_OWNER => {
+                            if ev.owner == x11rb::NONE {
+                                debug!("selection explicitly cleared, ignoring");
+                                break 'blk;
+                            }
 
-                    self.request_tasks.insert(
-                        transfer_window.id,
-                        Task::new(
-                            RequestTaskState::TargetsRequest,
-                            (transfer_window.atom, ev.owner),
-                        ),
-                    );
+                            info!("selection notification received from owner {}", ev.owner);
+                            let transfer_window = self.transfer_windows.get()?;
+                            info!("requesting selection with transfer window: {transfer_window:?}");
+                            conn.convert_selection(
+                                transfer_window.id,
+                                ev.selection,
+                                atoms.TARGETS,
+                                transfer_window.atom,
+                                x11rb::CURRENT_TIME,
+                            )?
+                            .check()?;
+
+                            self.request_tasks.insert(
+                                transfer_window.id,
+                                Task::new(
+                                    RequestTaskState::TargetsRequest,
+                                    (transfer_window.atom, ev.owner),
+                                ),
+                            );
+                        }
+                        SelectionEvent::SELECTION_WINDOW_DESTROY
+                        | SelectionEvent::SELECTION_CLIENT_CLOSE => {
+                            let Some((&item_id, _)) =
+                                self.items.get_by_index(self.metadata.pinned_count)
+                            else {
+                                debug!(
+                                    "selection owner died but no items to serve, leaving selection cleared"
+                                );
+                                break 'blk;
+                            };
+
+                            info!(
+                                "selection owner died ({:?}), taking over ownership with item {item_id}",
+                                ev.subtype
+                            );
+                            conn.set_selection_owner(
+                                paste_window,
+                                self.selection_atom,
+                                x11rb::CURRENT_TIME,
+                            )?
+                            .check()?;
+                            self.paste_item_id = Some(item_id);
+                        }
+                        _ => {}
+                    }
                 }
                 Event::SelectionNotify(ev) => {
                     let transfer_window = ev.requestor;
