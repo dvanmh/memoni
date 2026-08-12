@@ -269,6 +269,7 @@ impl<'a> Ui<'a> {
         Ok(font.and_then(|f| f.filename().map(PathBuf::from)))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         &mut self,
         egui_input: RawInput,
@@ -1157,7 +1158,7 @@ fn get_file_icon_path<P: AsRef<Path>>(file: P) -> Result<Option<PathBuf>> {
         .inspect_err(|e| {
             warn!(
                 "failed to read {:?} to determine a suitable icon, falling back to generic icon: {e}",
-                &file.as_ref()
+                file.as_ref()
             )
         })
         .ok();

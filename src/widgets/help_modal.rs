@@ -153,3 +153,9 @@ impl HelpModal {
         self.is_first_render = true;
     }
 }
+
+impl Default for HelpModal {
+    fn default() -> Self {
+        Self::new()
+    }
+}

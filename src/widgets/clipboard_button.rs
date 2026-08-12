@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use egui::{
     Color32, CornerRadius, FontSelection, Galley, Image, Pos2, Rect, Response, RichText, Sense,
-    Stroke, StrokeKind, TextStyle, TextWrapMode, TextureHandle, Ui, Vec2, Widget,
-    WidgetText, text::LayoutJob,
+    Stroke, StrokeKind, TextStyle, TextWrapMode, TextureHandle, Ui, Vec2, Widget, WidgetText,
+    text::LayoutJob,
 };
 
 #[derive(Default, Clone)]

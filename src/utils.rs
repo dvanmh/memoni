@@ -155,7 +155,7 @@ pub fn is_image_mime(mime: &str) -> bool {
 }
 
 pub fn utf16le_to_string(bytes: &[u8]) -> String {
-    assert!(bytes.len() % 2 == 0);
+    assert!(bytes.len().is_multiple_of(2));
     let u16_slice: &[u16] =
         unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const u16, bytes.len() / 2) };
     String::from_utf16_lossy(u16_slice)

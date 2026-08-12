@@ -760,10 +760,10 @@ impl<'a> Selection<'a> {
                         }
                     }
                 }
-                Event::SelectionClear(event) => {
-                    if event.owner == paste_window && self.paste_item_id.is_some() {
-                        info!("lost selection ownership");
-                    }
+                Event::SelectionClear(event)
+                    if event.owner == paste_window && self.paste_item_id.is_some() =>
+                {
+                    info!("lost selection ownership");
                 }
                 _ => {}
             }
@@ -1151,6 +1151,7 @@ fn trim_unicode_utf8(bytes: &[u8]) -> Result<&[u8]> {
     Ok(&bytes[start..end])
 }
 
+#[allow(clippy::type_complexity)]
 fn get_input_utils(
     conn: &XCBConnection,
     screen: &Screen,
