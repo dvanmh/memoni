@@ -182,6 +182,10 @@ pub struct ThemeConfig {
     #[serde_as(as = "DisplayFromStr")]
     pub pending_keys_background: Color,
     #[serde_as(as = "DisplayFromStr")]
+    pub error_foreground: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub error_background: Color,
+    #[serde_as(as = "DisplayFromStr")]
     pub pin_color: Color,
 }
 
@@ -199,6 +203,8 @@ impl Default for ThemeConfig {
             ribbon: Color(0x55ffffff),
             pending_keys_foreground: Color(0xffcccccc),
             pending_keys_background: Color(0xa0000000),
+            error_foreground: Color(0xfff87171),
+            error_background: Color(0xdd450a0a),
             pin_color: Color(0xffcccccc),
         }
     }

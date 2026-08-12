@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr as _,
     sync::{Arc, LazyLock},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Result, anyhow};
@@ -43,6 +44,8 @@ struct ImageInfo {
     thumbnail: RgbaImage,
     size: Option<(u32, u32)>,
 }
+
+const ERROR_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
 
 const FALLBACK_IMG_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -105,6 +108,7 @@ pub struct Ui<'a> {
     fallback: Fallback,
     help_modal: HelpModal,
     color_preview_background_texture: TextureHandle,
+    error_message: Option<(String, Instant)>,
 }
 
 impl<'a> Ui<'a> {
@@ -194,6 +198,7 @@ impl<'a> Ui<'a> {
             },
             help_modal: HelpModal::new(),
             color_preview_background_texture,
+            error_message: None,
         })
     }
 
@@ -639,6 +644,17 @@ impl<'a> Ui<'a> {
                 Self::draw_pending_keys_overlay(ctx, pending_keys, self.config);
             }
 
+            if self
+                .error_message
+                .as_ref()
+                .is_some_and(|(_, shown_at)| shown_at.elapsed() >= ERROR_MESSAGE_TIMEOUT)
+            {
+                self.error_message = None;
+            }
+            if let Some((message, _)) = &self.error_message {
+                Self::draw_error_overlay(ctx, message, self.config);
+            }
+
             match container_result {
                 Ok(scroll_area_output) => {
                     self.scroll_area_info = Some(ScrollAreaInfo {
@@ -790,12 +806,43 @@ impl<'a> Ui<'a> {
         painter.galley(galley_pos, galley, fg_color);
     }
 
+    pub fn show_error(&mut self, message: impl Into<String>) {
+        self.error_message = Some((message.into(), Instant::now()));
+    }
+
+    fn draw_error_overlay(ctx: &egui::Context, message: &str, config: &Config) {
+        let fg_color: Color32 = config.theme.error_foreground.into();
+        let bg_color: Color32 = config.theme.error_background.into();
+        let padding: Vec2 = config.layout.pending_keys_padding.into();
+        let margin: Vec2 = config.layout.pending_keys_margin.into();
+
+        let rect = ctx.input(|i| i.content_rect());
+        let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("error_overlay")));
+
+        let galley = painter.layout(
+            message.to_owned(),
+            FontId::proportional(config.font.pending_keys_text_size),
+            fg_color,
+            rect.width() - margin.x * 2.0 - padding.x * 2.0,
+        );
+
+        let galley_pos = egui::pos2(
+            rect.left() + margin.x + padding.x,
+            rect.bottom() - margin.y - padding.y - galley.size().y,
+        );
+        let bg_rect = Rect::from_min_size(galley_pos - padding, galley.size() + padding * 2.0);
+
+        painter.rect_filled(bg_rect, config.layout.pending_keys_corner_radius, bg_color);
+        painter.galley(galley_pos, galley, fg_color);
+    }
+
     pub fn reset(&mut self) {
         info!("resetting ui states");
         self.active_source = None;
         self.is_initial_run = true;
         self.hides_scroll_bar = self.config.scroll_bar_auto_hide;
         self.help_modal.hide();
+        self.error_message = None;
     }
 
     pub fn build_button_widget(&mut self, item: &SelectionItem) -> Result<()> {

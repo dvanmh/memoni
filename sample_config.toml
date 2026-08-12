@@ -250,6 +250,16 @@ pending_keys_foreground = "#ffffff"
 # default: "#000000a0"
 pending_keys_background = "#2e313ddd"
 
+# Error message overlay text color
+#
+# default: "#f87171"
+error_foreground = "#e57373"
+
+# Error message overlay background color
+#
+# default: "#450a0add"
+error_background = "#800000a0"
+
 # Pinned item indicator color
 #
 # default: "#cccccc"

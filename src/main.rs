@@ -450,13 +450,23 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                         }
                         KeyAction::Scroll(scroll_action) => scroll_actions.push(scroll_action),
                         KeyAction::Remove => {
-                            let removed_item = selection.items.remove(&active_id);
-                            if let Some(item) = removed_item {
-                                ui.remove_button_widgets(std::iter::once(item));
+                            let is_pinned = selection
+                                .items
+                                .iter()
+                                .take(selection.metadata.pinned_count)
+                                .any(|(&id, _)| id == active_id);
+                            if is_pinned {
+                                info!("ignoring remove action on pinned item {active_id}");
+                                ui.show_error("Cannot remove pinned item");
+                            } else {
+                                let removed_item = selection.items.remove(&active_id);
+                                if let Some(item) = removed_item {
+                                    ui.remove_button_widgets(std::iter::once(item));
+                                }
+                                info!("selection item {active_id} removed");
+                                persistence
+                                    .save_selection_data(&selection.items, &selection.metadata)?;
                             }
-                            info!("selection item {active_id} removed");
-                            persistence
-                                .save_selection_data(&selection.items, &selection.metadata)?;
                         }
                         KeyAction::Pin => {
                             let is_pinned = selection.toggle_pin(active_id)?;
