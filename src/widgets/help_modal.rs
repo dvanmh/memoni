@@ -24,7 +24,7 @@ impl HelpModal {
         let spacing = 10.0;
         Modal::new(Id::new("help_modal"))
             .backdrop_color(Color32::from_black_alpha(180))
-            .frame(Frame::popup(&ctx.style()).inner_margin(spacing))
+            .frame(Frame::popup(&ctx.global_style()).inner_margin(spacing))
             .show(ctx, |ui| {
                 let total_spacing = margin * 2.0 + spacing * 2.0;
                 ui.set_width(dimension.x - total_spacing);

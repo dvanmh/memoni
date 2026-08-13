@@ -1,6 +1,8 @@
 use crate::{utils::keysym_to_egui_key, x11_key_converter::X11KeyConverter, x11_window::X11Window};
 use anyhow::Result;
-use egui::{Event, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect, Vec2};
+use egui::{
+    Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect, TouchPhase, Vec2,
+};
 use log::trace;
 use x11rb::protocol::{Event as X11Event, xproto::ConnectionExt as _};
 use xkeysym::Keysym;
@@ -9,6 +11,7 @@ pub struct Input<'a> {
     pub egui_input: RawInput,
     window: &'a X11Window<'a>,
     key_converter: &'a X11KeyConverter<'a>,
+    modifiers: Modifiers,
 }
 
 impl<'a> Input<'a> {
@@ -26,11 +29,12 @@ impl<'a> Input<'a> {
             egui_input,
             window,
             key_converter,
+            modifiers: Modifiers::default(),
         })
     }
 
     pub fn handle_event(&mut self, event: &X11Event) {
-        let modifiers = &mut self.egui_input.modifiers;
+        let modifiers = &mut self.modifiers;
 
         let egui_event = match event {
             X11Event::ButtonPress(ev) | X11Event::ButtonRelease(ev) if ev.detail <= 3 => {
@@ -69,6 +73,7 @@ impl<'a> Input<'a> {
                     unit: MouseWheelUnit::Line,
                     delta: d,
                     modifiers: *modifiers,
+                    phase: TouchPhase::Move,
                 })
             }
             X11Event::KeyPress(ev) | X11Event::KeyRelease(ev) => 'blk: {
@@ -91,12 +96,13 @@ impl<'a> Input<'a> {
                             modifiers.shift = pressed;
                         }
 
-                        if modifiers_updated {
+                        break 'blk if modifiers_updated {
                             trace!("modifiers updated: {modifiers:?}");
+                            Some(Event::ModifiersChanged(*modifiers))
                         } else {
                             trace!("ignoring modifier: {keysym:?}");
-                        }
-                        break 'blk None;
+                            None
+                        };
                     }
 
                     if let Some(key) = keysym_to_egui_key(Keysym::new(keysym.into())) {
@@ -152,5 +158,9 @@ impl<'a> Input<'a> {
         self.egui_input.events.push(Event::PointerMoved(rel_pos));
 
         Ok(())
+    }
+
+    pub fn reset_state(&mut self) {
+        self.modifiers = Modifiers::default();
     }
 }

@@ -2,7 +2,7 @@ use crate::{config::Config, x11_window::X11Window};
 use anyhow::{Context as _, Result, bail};
 use egui::Color32;
 use egui_glow::Painter;
-use glow::Context as GlowContext;
+use egui_glow::glow::Context as GlowContext;
 use glutin::{
     config::ConfigTemplateBuilder,
     context::{ContextApi, ContextAttributesBuilder, NotCurrentContext, PossiblyCurrentContext},
@@ -175,7 +175,7 @@ impl<'a> OpenGLContext<'a> {
         trace!("rendering frame");
         let egui::FullOutput {
             platform_output: _,
-            textures_delta,
+            mut textures_delta,
             mut shapes,
             pixels_per_point,
             viewport_output: _,
@@ -190,7 +190,7 @@ impl<'a> OpenGLContext<'a> {
             self.dimensions,
             pixels_per_point,
             &clipped_primitives,
-            &textures_delta,
+            &mut textures_delta,
         );
 
         self.surface.swap_buffers(self.context.as_ref().unwrap())?;

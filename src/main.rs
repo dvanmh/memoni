@@ -585,7 +585,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 window.disable_events()?;
                 window.conn.flush()?;
                 window_shown = false;
-                input.egui_input.modifiers = Modifiers::NONE;
+                input.reset_state();
                 info!("window hidden");
             }
 

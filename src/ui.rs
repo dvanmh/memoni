@@ -14,7 +14,8 @@ use anyhow::{Result, anyhow};
 use egui::{
     Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak,
     FullOutput, Id, LayerId, Order, Painter, RawInput, Rect, RichText, Stroke, TextureHandle,
-    TextureOptions, Vec2, epaint, scroll_area::ScrollAreaOutput,
+    TextureOptions, Vec2, epaint,
+    scroll_area::{DragScroll, ScrollAreaOutput, ScrollSource},
 };
 use fontconfig::Fontconfig;
 use image::{GenericImageView, RgbaImage};
@@ -219,7 +220,7 @@ impl<'a> Ui<'a> {
         let theme = &config.theme;
 
         info!("setting global egui style");
-        egui_ctx.style_mut(|style| {
+        egui_ctx.global_style_mut(|style| {
             // style.debug.debug_on_hover = true;
             style.spacing.button_padding = layout.button_padding.into();
             style.spacing.item_spacing = egui::vec2(0.0, layout.button_spacing);
@@ -402,9 +403,9 @@ impl<'a> Ui<'a> {
         }
 
         let mut clicked_item = None;
-        let full_output = self.egui_ctx.run(egui_input, |ctx| {
+        let full_output = self.egui_ctx.run_ui(egui_input, |ui| {
             // Pick new active item if the current one got removed
-            if !ctx.will_discard() && active_item_removed {
+            if !ui.will_discard() && active_item_removed {
                 let nearest_item_id = if let Some(scroll_info) = &self.scroll_area_info
                     && let Some(removed_rect) = prev_active_rect
                 {
@@ -427,13 +428,13 @@ impl<'a> Ui<'a> {
             }
 
             // Update active item using hovered item
-            if !ctx.will_discard()
+            if !ui.will_discard()
                 && !self.is_initial_run
                 && self
                     .active_source
                     .is_some_and(|source| source == ActiveSource::Hovering)
             {
-                let hovered_item = ctx.viewport(|vp| {
+                let hovered_item = ui.viewport(|vp| {
                     self.item_widget_ids
                         .iter()
                         .find(|(_, widget_id)| vp.interact_widgets.hovered.contains(widget_id))
@@ -444,7 +445,7 @@ impl<'a> Ui<'a> {
             }
 
             // Active item is scrolled out of view, pick a new one
-            if !ctx.will_discard()
+            if !ui.will_discard()
                 && !self.is_initial_run
                 && self.prev_active_id == *active_id
                 && self.prev_active_idx == active_idx
@@ -568,14 +569,14 @@ impl<'a> Ui<'a> {
 
             if next_scroll_offset.is_some()
                 && let Some(scroll_area) = &self.scroll_area_info
-                && let Err(e) = egui::scroll_area::State::reset_velocity(ctx, scroll_area.id)
+                && let Err(e) = egui::scroll_area::State::reset_velocity(ui, scroll_area.id)
             {
                 debug!("failed to reset main scroll area velocity: {e}");
             }
 
             let mut content_sizes = HashMap::new();
             let container_result = Self::container(
-                ctx,
+                ui,
                 self.config,
                 next_scroll_offset,
                 self.hides_scroll_bar,
@@ -619,7 +620,7 @@ impl<'a> Ui<'a> {
                 },
             );
 
-            clicked_item = ctx.viewport(|vp| {
+            clicked_item = ui.viewport(|vp| {
                 vp.interact_widgets.clicked.and_then(|id| {
                     self.item_widget_ids
                         .iter()
@@ -630,7 +631,7 @@ impl<'a> Ui<'a> {
 
             if show_help {
                 self.help_modal
-                    .show(ctx, self.config.layout.window_dimensions.into());
+                    .show(ui, self.config.layout.window_dimensions.into());
             } else {
                 self.help_modal.hide();
             }
@@ -641,7 +642,7 @@ impl<'a> Ui<'a> {
             }
 
             if !pending_keys.is_empty() {
-                Self::draw_pending_keys_overlay(ctx, pending_keys, self.config);
+                Self::draw_pending_keys_overlay(ui, pending_keys, self.config);
             }
 
             if self
@@ -652,7 +653,7 @@ impl<'a> Ui<'a> {
                 self.error_message = None;
             }
             if let Some((message, _)) = &self.error_message {
-                Self::draw_error_overlay(ctx, message, self.config);
+                Self::draw_error_overlay(ui, message, self.config);
             }
 
             match container_result {
@@ -682,7 +683,7 @@ impl<'a> Ui<'a> {
     }
 
     fn container(
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         config: &Config,
         scroll_offset: Option<f32>,
         hides_scroll_bar: bool,
@@ -699,7 +700,7 @@ impl<'a> Ui<'a> {
 
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 if config.show_ribbon {
                     Self::draw_ribbon(
                         ui.painter(),
@@ -714,7 +715,7 @@ impl<'a> Ui<'a> {
                     ui.max_rect().max - egui::vec2(0.0, scroll_bar_margin),
                 );
 
-                let original_style = (*ui.ctx().style()).clone();
+                let original_style = ui.style().as_ref().clone();
                 let mut scrollbar_style = original_style.clone();
                 scrollbar_style.visuals.extreme_bg_color = theme.scroll_background.into();
 
@@ -734,6 +735,10 @@ impl<'a> Ui<'a> {
 
                 let mut scroll_area = egui::ScrollArea::vertical()
                     .auto_shrink(false)
+                    .scroll_source(ScrollSource {
+                        drag: DragScroll::Always,
+                        ..Default::default()
+                    })
                     .scroll_bar_rect(scroll_bar_rect);
                 if let Some(offset) = scroll_offset {
                     scroll_area = scroll_area.scroll_offset(egui::vec2(0.0, offset));
