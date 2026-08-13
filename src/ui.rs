@@ -428,6 +428,7 @@ impl<'a> Ui<'a> {
             }
 
             // Update active item using hovered item
+            let mut active_id_updated_by_hovering = false;
             if !ui.will_discard()
                 && !self.is_initial_run
                 && self
@@ -441,6 +442,7 @@ impl<'a> Ui<'a> {
                 });
                 if let Some((&hovered_item_id, _)) = hovered_item {
                     *active_id = hovered_item_id;
+                    active_id_updated_by_hovering = true;
                 }
             }
 
@@ -449,6 +451,13 @@ impl<'a> Ui<'a> {
                 && !self.is_initial_run
                 && self.prev_active_id == *active_id
                 && self.prev_active_idx == active_idx
+
+                // If the pointer is on the top item (A) and the user scrolls up, an item (B)
+                // scrolls in that is only partially visible. Without this check, the code below
+                // picks A as the active item, but on the next frame hovering over B switches it
+                // back, causing flickering until B is fully in view.
+                && !active_id_updated_by_hovering
+
                 && let Some(scroll_info) = &self.scroll_area_info
                 && let Some(active_rect) = scroll_info.content_rects.get(active_id)
                 && let scroll_rect = scroll_info
