@@ -1428,7 +1428,11 @@ fn build_display_text(s: &str, theme: &ThemeConfig) -> Vec<RichText> {
         }
 
         match c {
-            '\r' => {}
+            '\r' => {
+                let prev_str = mem::take(&mut str);
+                text.push(prev_str.into());
+                text.push(RichText::new('␍').color(theme.muted_foreground));
+            }
             '\n' => {
                 let prev_str = mem::take(&mut str);
                 text.push(prev_str.into());
