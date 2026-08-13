@@ -85,6 +85,8 @@ struct ScrollAreaInfo {
     rect: Rect,
     content_rects: HashMap<u64, Rect>,
     offset: f32,
+    is_scrolling: bool,
+    prev_is_scrolling: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -527,16 +529,19 @@ impl<'a> Ui<'a> {
                 .map(|s| s.rect.height() < scroll_content_size)
                 .unwrap_or(false);
 
-            // FIXME: scrolls to active item on initial run, not scrolling to top
-            let sets_default_scroll_offset = self.is_initial_run
-                // Force items to be at the bottom of the window
-                || (flow == UiFlow::BottomToTop && !content_overflowed);
-            let sets_active_scroll_offset =
-                self.prev_active_id != *active_id || self.prev_active_idx != active_idx;
-            let next_scroll_offset =
-                if (sets_default_scroll_offset || sets_active_scroll_offset || items_removed)
-                    && let Some(scroll_area) = &self.scroll_area_info
-                {
+            let next_scroll_offset = if let Some(scroll_area) = &self.scroll_area_info {
+                // FIXME: scrolls to active item on initial run, not scrolling to top
+                let sets_default_scroll_offset = self.is_initial_run
+                    // Force items to be at the bottom of the window
+                    || (flow == UiFlow::BottomToTop && !content_overflowed);
+                let sets_active_scroll_offset = self.prev_active_id != *active_id
+                    || self.prev_active_idx != active_idx
+                    // Momentum scrolling may have moved the active item out of view
+                    || scroll_area
+                        .prev_is_scrolling
+                        .is_some_and(|prev| prev != scroll_area.is_scrolling);
+
+                if sets_default_scroll_offset || sets_active_scroll_offset || items_removed {
                     let padding = layout.window_padding.y as f32;
                     let scroll_rect = scroll_area.rect;
                     let scroll_offset = scroll_area.offset;
@@ -554,7 +559,12 @@ impl<'a> Ui<'a> {
                         && scroll_offset + scroll_rect.height() > scroll_content_size
                     {
                         Some(scroll_content_size - scroll_rect.height())
-                    } else if let Some(&active_rect) = scroll_area.content_rects.get(active_id)
+                    } else
+                    // During momentum scrolling, the pointer can hover over an item near the edge
+                    // of the window and make it active. Avoid scrolling that item into view while
+                    // the list is moving, because that would reset its velocity and stop the scroll.
+                    if !scroll_area.is_scrolling
+                        && let Some(&active_rect) = scroll_area.content_rects.get(active_id)
                         && let unpadded_scroll_rect = scroll_rect.shrink2(egui::vec2(0.0, padding))
                         && !unpadded_scroll_rect.contains_rect(active_rect)
                     {
@@ -572,7 +582,10 @@ impl<'a> Ui<'a> {
                     }
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
             self.item_widget_ids.clear();
 
@@ -672,6 +685,14 @@ impl<'a> Ui<'a> {
                         rect: scroll_area_output.inner_rect,
                         content_rects: content_sizes,
                         offset: scroll_area_output.state.offset[1],
+                        is_scrolling: self
+                            .scroll_area_info
+                            .as_ref()
+                            .is_some_and(|prev| prev.offset != scroll_area_output.state.offset[1]),
+                        prev_is_scrolling: self
+                            .scroll_area_info
+                            .as_ref()
+                            .map(|prev| prev.is_scrolling),
                     });
                 }
                 Err(err) => run_error = Some(err),
