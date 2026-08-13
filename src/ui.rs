@@ -1404,7 +1404,12 @@ fn build_display_text(s: &str, theme: &ThemeConfig) -> Vec<RichText> {
     let mut str = String::with_capacity(s.len());
     let mut chars = chars.enumerate().peekable();
     let mut is_leading_whitespace = true;
-    let mut i_c = chars.next();
+    let mut i_c = chars.next().or_else(|| {
+        last_non_whitespace.map(|c| {
+            last_non_whitespace = None;
+            (0, c)
+        })
+    });
     while let Some((i, c)) = i_c {
         // Very very long string causes egui to choke on first render, even when we only display it
         // on a single line
