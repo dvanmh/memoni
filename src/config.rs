@@ -36,6 +36,7 @@ pub struct Config {
     pub item_limit: usize,
     pub show_ribbon: bool,
     pub scroll_bar_auto_hide: bool,
+    pub drag_scroll: bool,
     pub show_quick_paste_hint: bool,
     pub window_position_mode: WindowPositionMode,
 
@@ -56,6 +57,7 @@ impl Default for Config {
             item_limit: 100,
             show_ribbon: false,
             scroll_bar_auto_hide: false,
+            drag_scroll: false,
             show_quick_paste_hint: true,
             window_position_mode: WindowPositionMode::Monitor,
             app_paste_keymaps: Default::default(),

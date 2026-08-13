@@ -766,7 +766,11 @@ impl<'a> Ui<'a> {
                 let mut scroll_area = egui::ScrollArea::vertical()
                     .auto_shrink(false)
                     .scroll_source(ScrollSource {
-                        drag: DragScroll::Always,
+                        drag: if config.drag_scroll {
+                            DragScroll::Always
+                        } else {
+                            DragScroll::Never
+                        },
                         ..Default::default()
                     })
                     .scroll_bar_rect(scroll_bar_rect);
