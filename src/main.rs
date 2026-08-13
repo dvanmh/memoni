@@ -288,8 +288,8 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
             let mut paste_item_id = None;
             let mut paste_modifier = PasteModifier::default();
 
-            // non-blocking when window is visible, blocking otherwise
-            let poll_timeout = if window_shown {
+            // non-blocking when window is visible or first-loop pre-rendering, blocking otherwise
+            let poll_timeout = if window_shown || first_loop {
                 Some(Duration::ZERO)
             } else {
                 None
@@ -437,6 +437,10 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
             }
 
             if first_loop || items_updated || window_shown || will_show_window {
+                if first_loop {
+                    debug!("pre-rendering the window on startup");
+                }
+
                 let (key_actions, pointer_actions) =
                     keymap_action.process_input(&mut input.egui_input, mode);
                 let mut scroll_actions = vec![];
@@ -558,6 +562,10 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 }
 
                 gl_context.render(&ui.egui_ctx, full_output)?;
+
+                if first_loop {
+                    debug!("pre-rendered the window on startup");
+                }
             }
 
             if will_show_window {
