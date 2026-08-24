@@ -15,7 +15,8 @@ use std::{
 
 use crate::{
     ordered_hash_map::OrderedHashMap,
-    selection::{SelectionItem, SelectionMetadata, SelectionType},
+    selection::{SelectionMetadata, SelectionType},
+    selection_item::SelectionItem,
 };
 
 const BINCODE_CONFIG: bincode::config::Configuration = bincode::config::standard();
@@ -145,7 +146,7 @@ fn decode_version_1(
     let old_items: VecDeque<SelectionItem> = bincode::decode_from_slice(data, BINCODE_CONFIG)?.0;
     let mut new_items = OrderedHashMap::new();
     for item in old_items {
-        new_items.push_back(item.id, item);
+        new_items.push_back(item.id(), item);
     }
 
     Ok((new_items, SelectionMetadata::default()))

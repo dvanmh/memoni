@@ -29,8 +29,9 @@ use crate::{
     freedesktop_cache::get_cached_thumbnail,
     keymap_action::{KeyChord, ScrollAction},
     ordered_hash_map::OrderedHashMap,
-    selection::{SelectionItem, SelectionMetadata},
-    utils::{is_image_mime, is_plaintext_mime, percent_decode, utf16le_to_string},
+    selection::SelectionMetadata,
+    selection_item::{self, ActedOnUris, MozUrl, SelectionItem},
+    utils::is_image_mime,
     widgets::{clipboard_button::ClipboardButton, help_modal::HelpModal},
 };
 
@@ -60,10 +61,15 @@ const FALLBACK_DIR_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/images/fallback_directory.png"
 ));
+const FALLBACK_UNKNOWN_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/images/fallback_unknown.png"
+));
 struct Fallback {
     image: RgbaImage,
     file: RgbaImage,
     directory: RgbaImage,
+    unknown: RgbaImage,
 }
 
 const NOTO_SANS: &[u8] = include_bytes!(concat!(
@@ -174,6 +180,7 @@ impl<'a> Ui<'a> {
         let fallback_img = image::load_from_memory(FALLBACK_IMG_BYTES)?.to_rgba8();
         let fallback_file = image::load_from_memory(FALLBACK_FILE_BYTES)?.to_rgba8();
         let fallback_dir = image::load_from_memory(FALLBACK_DIR_BYTES)?.to_rgba8();
+        let fallback_unknown = image::load_from_memory(FALLBACK_UNKNOWN_BYTES)?.to_rgba8();
 
         let color_preview_background_image = make_alpha_checkerboard_image(6);
         let color_preview_background_texture = egui_ctx.load_texture(
@@ -198,6 +205,7 @@ impl<'a> Ui<'a> {
                 image: fallback_img,
                 file: fallback_file,
                 directory: fallback_dir,
+                unknown: fallback_unknown,
             },
             help_modal: HelpModal::new(),
             color_preview_background_texture,
@@ -623,8 +631,8 @@ impl<'a> Ui<'a> {
 
                         let mut btn_widget = self
                             .button_widgets
-                            .get(&item.id)
-                            .ok_or_else(|| anyhow!("missing button widget for item {}", item.id))?
+                            .get(&item.id())
+                            .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?
                             .clone()
                             .is_active(is_active)
                             .is_pinned(is_pinned);
@@ -635,7 +643,7 @@ impl<'a> Ui<'a> {
                         let btn = ui.add(btn_widget);
 
                         self.item_widget_ids.insert(id, btn.id);
-                        content_sizes.insert(item.id, btn.rect);
+                        content_sizes.insert(item.id(), btn.rect);
                     }
 
                     Ok(())
@@ -885,7 +893,7 @@ impl<'a> Ui<'a> {
     }
 
     pub fn build_button_widget(&mut self, item: &SelectionItem) -> Result<()> {
-        trace!("building button widget for item {}", item.id);
+        trace!("building button widget for item {}", item.id());
         let Ui {
             egui_ctx: ctx,
             config,
@@ -893,14 +901,10 @@ impl<'a> Ui<'a> {
             ..
         } = self;
 
-        let mut text_content = None;
+        let text_data = item.text_data();
         let mut img_info = None;
-        let mut img_metadata = None;
-        let mut files = None;
-        for (mime, data) in &item.data {
-            if is_plaintext_mime(mime) {
-                text_content = Some(str::from_utf8(data)?);
-            } else if is_image_mime(mime) {
+        for (mime, data) in item.data() {
+            if is_image_mime(mime) {
                 let img_type = mime.split(['/', '+']).nth(1).unwrap_or(mime).to_uppercase();
                 let img = if img_type == "SVG" {
                     load_svg(data, config.layout.preview_size.into())
@@ -922,7 +926,7 @@ impl<'a> Ui<'a> {
                     Err(err) => {
                         error!(
                             "failed to load image with mime {mime} of item {}: {err}",
-                            item.id
+                            item.id()
                         );
                         ImageInfo {
                             r#type: img_type,
@@ -931,28 +935,6 @@ impl<'a> Ui<'a> {
                         }
                     }
                 });
-            } else if mime == "text/x-moz-url" {
-                // Firefox encodes data with UTF-16
-                // https://stackoverflow.com/a/51581772
-                let data = utf16le_to_string(data);
-                img_metadata = Some(
-                    data.split_once('\n')
-                        .map(|(s, a)| (s.to_string(), a.to_string()))
-                        .unwrap_or((data, "".to_string())),
-                );
-            } else if mime == "text/uri-list" && files.is_none() {
-                let uris = str::from_utf8(data)?
-                    .lines()
-                    // text/uri-list can contain comment (based on RFC 2483)
-                    .filter(|l| !l.is_empty() && !l.starts_with("#"))
-                    .collect::<Vec<_>>();
-                if uris.len() == uris.iter().filter(|u| u.starts_with("file://")).count() {
-                    files = Some((None, uris));
-                }
-            } else if mime == "x-special/gnome-copied-files" {
-                let mut file_iter = str::from_utf8(data)?.lines();
-                let action = file_iter.next();
-                files = Some((action, file_iter.collect()));
             }
         }
 
@@ -966,28 +948,22 @@ impl<'a> Ui<'a> {
             .color_preview_corner_radius(config.layout.color_preview_corner_radius)
             .color_preview_background(self.color_preview_background_texture.clone());
 
-        if let Some((action, file_uris)) = files {
-            let file_paths = file_uris
-                .iter()
-                .map(|u| {
-                    str::from_utf8(&percent_decode(&u.as_bytes()["file://".len()..]))
-                        .unwrap()
-                        .to_owned()
-                })
-                .collect::<Vec<_>>();
-            let mut path_iter = file_paths.iter();
+        if let Some(ActedOnUris {
+            action,
+            uris: files,
+        }) = &text_data.files
+        {
+            let mut path_iter = files.iter();
             if let Some(path) = path_iter.next() {
-                btn = btn.append_label(vec![format_path_str(path).into()]);
+                btn = btn.append_label(vec![path.display.as_ref().into()]);
             }
             if let Some(path) = path_iter.next() {
-                btn = btn.append_label(vec![format_path_str(path).into()]);
+                btn = btn.append_label(vec![path.display.as_ref().into()]);
             }
             let more_count = path_iter.count();
 
             let mut sublabel_text = "".to_owned();
-            if let Some(action) = action {
-                sublabel_text.push_str(action);
-            }
+            sublabel_text.push_str(action.as_ref());
 
             if more_count > 0 {
                 if !sublabel_text.is_empty() {
@@ -1003,12 +979,13 @@ impl<'a> Ui<'a> {
             }
 
             let thumbnail = create_files_thumbnail(
-                &file_paths,
+                files,
                 config.layout.preview_size,
                 &fallback.file,
                 &fallback.directory,
+                &fallback.unknown,
             );
-            let texture = load_texture(ctx, item.id, &thumbnail);
+            let texture = load_texture(ctx, item.id(), &thumbnail);
             btn = btn.preview(texture, config.layout.preview_size);
         } else if let Some(ImageInfo {
             r#type,
@@ -1016,7 +993,7 @@ impl<'a> Ui<'a> {
             thumbnail,
         }) = img_info
         {
-            let texture = load_texture(ctx, item.id, &thumbnail);
+            let texture = load_texture(ctx, item.id(), &thumbnail);
             let sublabel_text = if let Some(size) = size {
                 format!("{} [{}x{}]", r#type, size.0, size.1)
             } else {
@@ -1028,13 +1005,13 @@ impl<'a> Ui<'a> {
                 .sublabel(RichText::new(sublabel_text).size(config.font.secondary_size))
                 .preview_background(config.theme.preview_background);
 
-            if let Some((src, alt)) = img_metadata {
+            if let Some(MozUrl { src, alt }) = &text_data.moz_url {
                 if !alt.is_empty() {
-                    btn = btn.label(build_display_text(&alt, &config.theme));
+                    btn = btn.label(build_display_text(alt, &config.theme));
                 }
-                btn = btn.preview_source(&src);
+                btn = btn.preview_source(src);
             }
-        } else if let Some(text) = text_content {
+        } else if let Some(text) = &text_data.plain {
             btn = btn.label(build_display_text(text, &config.theme));
             if config.layout.show_color_preview
                 && let Some(color) = parse_color(text)
@@ -1047,7 +1024,7 @@ impl<'a> Ui<'a> {
             ]);
         }
 
-        self.button_widgets.insert(item.id, btn);
+        self.button_widgets.insert(item.id(), btn);
         Ok(())
     }
 
@@ -1056,8 +1033,8 @@ impl<'a> Ui<'a> {
         removed_items: I,
     ) {
         for item in removed_items {
-            trace!("removing button widget for item {}", item.id);
-            self.button_widgets.remove(&item.id);
+            trace!("removing button widget for item {}", item.id());
+            self.button_widgets.remove(&item.id());
         }
     }
 }
@@ -1133,10 +1110,11 @@ fn find_item_at_distance_from(
 }
 
 fn create_files_thumbnail(
-    files: &[String],
+    files: &[selection_item::Uri],
     size: Dimensions,
     fallback_file: &RgbaImage,
     fallback_dir: &RgbaImage,
+    fallback_unknown: &RgbaImage,
 ) -> RgbaImage {
     let mut thumbnail = RgbaImage::from_pixel(
         size.width.into(),
@@ -1168,27 +1146,32 @@ fn create_files_thumbnail(
     let template = TEMPLATES[display_count - 1];
 
     for i in 0..display_count {
-        let file = &files[i];
-        let is_dir = Path::new(file).is_dir();
-        let file_thumb_temp = template[i];
+        let item_thumb_temp = template[i];
         let coord = &[
-            (file_thumb_temp[0] * size.width as f32).round() as u16,
-            (file_thumb_temp[1] * size.height as f32).round() as u16,
-            (file_thumb_temp[2] * size.width as f32).round() as u16,
-            (file_thumb_temp[3] * size.height as f32).round() as u16,
+            (item_thumb_temp[0] * size.width as f32).round() as u16,
+            (item_thumb_temp[1] * size.height as f32).round() as u16,
+            (item_thumb_temp[2] * size.width as f32).round() as u16,
+            (item_thumb_temp[3] * size.height as f32).round() as u16,
         ];
         let size = Vec2::new((coord[2] - coord[0]).into(), (coord[3] - coord[1]).into());
 
-        let file_thumb = get_file_thumbnail(file, size, is_dir).unwrap_or_else(|e| {
-            error!("failed to get file thumbnail for {file}: {e}");
-            None
-        });
-        let fallback = if is_dir { fallback_dir } else { fallback_file };
-        let file_thumb = file_thumb.as_ref().unwrap_or(fallback);
-        let scaled_file_thumb = create_thumbnail(file_thumb, size);
+        let (item_thumb, fallback_thumb) = if let Some(file) = &files[i].file_path {
+            let is_dir = file.is_dir();
+            let file_thumb = get_file_thumbnail(file, size, is_dir).unwrap_or_else(|e| {
+                error!("failed to get file thumbnail for {}: {e}", file.display());
+                None
+            });
+            let fallback = if is_dir { fallback_dir } else { fallback_file };
+            (file_thumb, fallback)
+        } else {
+            (None, fallback_unknown)
+        };
+
+        let scaled_item_thumb =
+            create_thumbnail(item_thumb.as_ref().unwrap_or(fallback_thumb), size);
         image::imageops::overlay(
             &mut thumbnail,
-            &scaled_file_thumb,
+            &scaled_item_thumb,
             coord[0].into(),
             coord[1].into(),
         );
@@ -1462,28 +1445,6 @@ fn build_display_text(s: &str, theme: &ThemeConfig) -> Vec<RichText> {
     text.push(RichText::new(trailing_whitespace_str).color(theme.muted_foreground));
 
     text
-}
-
-fn format_path_str(path: &str) -> String {
-    let home = dirs::home_dir();
-    let mut s = String::with_capacity(path.len());
-
-    if let Some(home) = home
-        && let Some(home_str) = home.to_str()
-        && let Some(stripped) = path.strip_prefix(home_str)
-    {
-        s.push('~');
-        s.push_str(stripped);
-    } else {
-        s.push_str(path);
-    }
-
-    let p = Path::new(path);
-    if p.is_dir() && !s.ends_with('/') {
-        s.push('/');
-    }
-
-    s
 }
 
 fn read_first_n_bytes<P: AsRef<Path>>(path: P, n: u64) -> Result<Vec<u8>> {

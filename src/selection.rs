@@ -34,6 +34,7 @@ use crate::{
     config::{Config, KeyStroke, Modifier},
     keymap_action::PasteModifier,
     ordered_hash_map::OrderedHashMap,
+    selection_item::{SelectionData, SelectionItem},
     transfer_window_pool::{TransferWindow, TransferWindowPool},
     utils::{image_mime_score, is_image_mime, is_plaintext_mime, plaintext_mime_score},
     x11_key_converter::X11KeyConverter,
@@ -65,18 +66,11 @@ x11rb::atom_manager! {
     }
 }
 
-type SelectionData = BTreeMap<String, Vec<u8>>;
 type Owner = u32;
 
 #[derive(Debug, Default, Encode, Decode)]
 pub struct SelectionMetadata {
     pub pinned_count: usize,
-}
-
-#[derive(Debug, Encode, Decode)]
-pub struct SelectionItem {
-    pub id: u64,
-    pub data: SelectionData,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -593,7 +587,7 @@ impl<'a> Selection<'a> {
                     let mut supported_atoms = Vec::new();
                     supported_atoms.push(self.atoms.TARGETS);
                     let mut requested_data = None;
-                    for (atom_name, data) in &item.data {
+                    for (atom_name, data) in item.data() {
                         let atom =
                             get_or_create_mime_atom(conn, self.mime_atoms.get_mut(), atom_name)?;
                         if atom != x11rb::NONE {
@@ -678,7 +672,8 @@ impl<'a> Selection<'a> {
 
                     info!(
                         "responded to requestor {} paste request with selection {} ({atom_name})",
-                        ev.requestor, item.id
+                        ev.requestor,
+                        item.id()
                     );
                     conn.change_property8(
                         PropMode::REPLACE,
@@ -736,7 +731,7 @@ impl<'a> Selection<'a> {
                             if let Some(data) = &self
                                 .items
                                 .get(&item_id)
-                                .and_then(|i| i.data.get(data_atom_name))
+                                .and_then(|i| i.data().get(data_atom_name))
                             {
                                 let end = offset.saturating_add(INCR_CHUNK_SIZE).min(data.len());
                                 let chunk = &data[*offset..end];
@@ -877,8 +872,8 @@ impl<'a> Selection<'a> {
             && is_plaintext_mime(mime)
             // ---
             && let Some((_, prev_item)) = prev_item
-            && prev_item.data.len() == 1
-            && let Some(prev_text) = prev_item.data.get(mime)
+            && prev_item.data().len() == 1
+            && let Some(prev_text) = prev_item.data().get(mime)
             // ---
             && (contains(new_text, prev_text) || contains(prev_text, new_text))
         {
@@ -908,10 +903,7 @@ impl<'a> Selection<'a> {
             self.items.insert(
                 self.metadata.pinned_count,
                 new_item_id,
-                SelectionItem {
-                    id: new_item_id,
-                    data: mem::take(data),
-                },
+                SelectionItem::create(new_item_id, mem::take(data)),
             );
 
             if self.items.len() > self.config.item_limit {

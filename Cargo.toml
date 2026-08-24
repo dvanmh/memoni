@@ -26,6 +26,7 @@ mio = "1.0.4"
 raw-window-handle = "0.6.2"
 resvg = { version = "0.47.0", default-features = false }
 rustix = { version = "1.1.2", default-features = false, features = ["process", "time"] }
+self_cell = "1.3.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_with = "3.14.0"
 signal-hook = "0.3.18"

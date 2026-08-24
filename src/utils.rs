@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use egui::Key;
 use xkeysym::Keysym;
 
@@ -161,32 +163,42 @@ pub fn utf16le_to_string(bytes: &[u8]) -> String {
     String::from_utf16_lossy(u16_slice)
 }
 
-pub fn percent_decode(input: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(input.len());
-    let mut bytes = input.iter();
-    while let Some(&b) = bytes.next() {
-        if b == b'%' {
-            let x = bytes.next();
-            let y = bytes.next();
-            if let (Some(&x), Some(&y)) = (x, y)
-                && let Ok(v) = u8::from_str_radix(str::from_utf8(&[x, y]).unwrap(), 16)
-            {
-                out.push(v);
-                continue;
-            }
+pub fn percent_decode_lossy(input: Cow<str>) -> Cow<str> {
+    let bytes = input.as_bytes();
+    let mut decoded: Option<Vec<u8>> = None;
+    let mut last_copied = 0;
+    let mut i = 0;
 
-            out.push(b'%');
-            if let Some(&x) = x {
-                out.push(x);
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let Some(v) = decode_hex(bytes, i)
+        {
+            let out = decoded.get_or_insert_with(|| Vec::with_capacity(bytes.len()));
+            out.extend_from_slice(&bytes[last_copied..i]);
+            out.push(v);
+            i += 3;
+            last_copied = i;
+            continue;
+        }
+        i += 1;
+    }
+
+    match decoded {
+        None => input,
+        Some(mut out) => {
+            out.extend_from_slice(&bytes[last_copied..]);
+            match String::from_utf8(out) {
+                Ok(s) => Cow::Owned(s),
+                Err(e) => Cow::Owned(String::from_utf8_lossy(e.as_bytes()).into_owned()),
             }
-            if let Some(&y) = y {
-                out.push(y);
-            }
-        } else {
-            out.push(b);
         }
     }
-    out
+}
+
+fn decode_hex(bytes: &[u8], i: usize) -> Option<u8> {
+    let x = *bytes.get(i + 1)?;
+    let y = *bytes.get(i + 2)?;
+    u8::from_str_radix(str::from_utf8(&[x, y]).ok()?, 16).ok()
 }
 
 pub fn percent_encode(input: &[u8]) -> Vec<u8> {
