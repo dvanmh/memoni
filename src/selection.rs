@@ -988,6 +988,17 @@ impl<'a> Selection<'a> {
             .check()?;
 
         let (key, move_pointer, keycode) = get_input_utils(conn, self.screen, self.key_converter);
+
+        // Prevent holding modifiers from interfering with pasting keymap
+        key(KEY_RELEASE_EVENT, keycode(Keysym::Control_L)?)?;
+        key(KEY_RELEASE_EVENT, keycode(Keysym::Control_R)?)?;
+        key(KEY_RELEASE_EVENT, keycode(Keysym::Shift_L)?)?;
+        key(KEY_RELEASE_EVENT, keycode(Keysym::Shift_R)?)?;
+        key(KEY_RELEASE_EVENT, keycode(Keysym::Alt_L)?)?;
+        key(KEY_RELEASE_EVENT, keycode(Keysym::Alt_R)?)?;
+        key(KEY_RELEASE_EVENT, keycode(Keysym::Super_L)?)?;
+        key(KEY_RELEASE_EVENT, keycode(Keysym::Super_R)?)?;
+
         if self.selection_atom == self.atoms.CLIPBOARD {
             let app_paste_keymaps = &self.config.app_paste_keymaps;
             // Focus may be PointerRoot/None or the window may already be gone;
@@ -1010,14 +1021,6 @@ impl<'a> Selection<'a> {
                     modifiers: vec![Modifier::Control],
                 }]
             };
-
-            // Prevent holding modifiers from interfering with pasting keymap
-            key(KEY_RELEASE_EVENT, keycode(Keysym::Control_L)?)?;
-            key(KEY_RELEASE_EVENT, keycode(Keysym::Control_R)?)?;
-            key(KEY_RELEASE_EVENT, keycode(Keysym::Shift_L)?)?;
-            key(KEY_RELEASE_EVENT, keycode(Keysym::Shift_R)?)?;
-            key(KEY_RELEASE_EVENT, keycode(Keysym::Alt_L)?)?;
-            key(KEY_RELEASE_EVENT, keycode(Keysym::Alt_R)?)?;
 
             info!("pasting into {focused_window} using keymap: {keymap:?}");
             for key_stroke in keymap {
