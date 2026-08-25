@@ -33,6 +33,16 @@ show_quick_paste_hint = true
 # default: CLIPBOARD - "monitor", PRIMARY - "pointer"
 window_position_mode = "dynamic"
 
+# Window classes that need middle-click paste delay
+#
+# Some windows (e.g., Firefox) don't receive paste event if memoni middle-clickes immediately
+# after memoni window closes. For these, we can make memoni wait a moment before clicking.
+#
+# Each string is a regex matched against the instance/class names of the window under the pointer.
+#
+# default: ["^[Ff]irefox"]
+middle_click_delay_windows = ["^[Ff]irefox"]
+
 
 # Application-specific paste keymaps for CLIPBOARD selection
 #

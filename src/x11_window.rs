@@ -20,6 +20,7 @@ x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
         WM_PROTOCOLS,
         WM_CLIENT_MACHINE,
+        WM_STATE,
         UTF8_STRING,
         _NET_CURRENT_DESKTOP,
         _NET_DESKTOP_VIEWPORT,
@@ -46,7 +47,7 @@ pub struct X11Window<'a> {
     pub win_id: Cell<u32>,
     pub selection_type: SelectionType,
     pub dimensions: Dimensions,
-    pub win_opened_pointer_pos: Cell<(i16, i16)>,
+    pub win_opened_pointer: Cell<(i16, i16, Option<Window>)>,
     config: &'a Config,
     shown_win_event_mask: EventMask,
     hidden_win_event_mask: EventMask,
@@ -84,7 +85,7 @@ impl<'a> X11Window<'a> {
             shown_win_event_mask,
             hidden_win_event_mask,
             win_pos: Cell::new((0, 0)),
-            win_opened_pointer_pos: Cell::new((0, 0)),
+            win_opened_pointer: Cell::new((0, 0, None)),
             win_placed_above_pointer: Cell::new(false),
             keyboard_grab_retry_count: Cell::new(0),
             pointer_grab_retry_count: Cell::new(0),
@@ -225,8 +226,11 @@ impl<'a> X11Window<'a> {
 
     pub fn update_window_pos(&self) -> Result<()> {
         let pointer = self.conn.query_pointer(self.screen.root)?.reply()?;
-        self.win_opened_pointer_pos
-            .set((pointer.root_x, pointer.root_y));
+        let pointer_window =
+            find_window_under_pointer(&self.conn, pointer.child, self.atoms.WM_STATE)?;
+
+        self.win_opened_pointer
+            .set((pointer.root_x, pointer.root_y, pointer_window));
 
         let (x, y, placed_above_pointer) = self.calculate_window_pos()?;
         self.conn.configure_window(
@@ -384,10 +388,6 @@ impl<'a> X11Window<'a> {
         self.win_pos.get()
     }
 
-    pub fn get_win_opened_pointer_pos(&self) -> (i16, i16) {
-        self.win_opened_pointer_pos.get()
-    }
-
     pub fn is_win_placed_above_pointer(&self) -> bool {
         self.win_placed_above_pointer.get()
     }
@@ -397,7 +397,7 @@ impl<'a> X11Window<'a> {
             conn,
             screen,
             atoms,
-            win_opened_pointer_pos,
+            win_opened_pointer: win_opened_pointer_pos,
             config,
             ..
         } = self;
@@ -589,7 +589,9 @@ fn get_desktop_viewports(
     }
 
     let viewports = values
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| Viewport {
             x: pair[0],
             y: pair[1],
@@ -597,4 +599,32 @@ fn get_desktop_viewports(
         .collect::<Vec<_>>();
 
     Ok(viewports)
+}
+
+fn find_window_under_pointer(
+    conn: &XCBConnection,
+    pointer_child_win: Window,
+    wm_state_atom: u32,
+) -> Result<Option<Window>> {
+    if pointer_child_win == 0 {
+        return Ok(None);
+    }
+
+    let prop = conn
+        .get_property(false, pointer_child_win, wm_state_atom, AtomEnum::ANY, 0, 0)?
+        .reply()?;
+
+    // this window has WM_STATE
+    if prop.type_ != 0 {
+        return Ok(Some(pointer_child_win));
+    }
+
+    let tree = conn.query_tree(pointer_child_win)?.reply()?;
+    for &child in &tree.children {
+        if let Some(result) = find_window_under_pointer(conn, child, wm_state_atom)? {
+            return Ok(Some(result));
+        }
+    }
+
+    Ok(None)
 }

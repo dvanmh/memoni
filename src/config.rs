@@ -3,6 +3,7 @@ use egui::Color32;
 use egui::ecolor::ParseHexColorError;
 use log::{debug, info};
 use make_optional::MakeOptional;
+use regex::Regex;
 use serde::Deserialize;
 use serde_with::{DisplayFromStr, FromInto, OneOrMany, serde_as};
 use std::collections::HashMap;
@@ -43,6 +44,11 @@ pub struct Config {
     #[serde_as(as = "HashMap<_, OneOrMany<_>>")]
     pub app_paste_keymaps: HashMap<String, Vec<KeyStroke>>,
 
+    pub middle_click_delay_windows: Vec<String>,
+
+    #[serde(skip)]
+    pub middle_click_delay_patterns: Vec<Regex>,
+
     #[optional(optional_type)]
     pub layout: LayoutConfig,
     #[optional(optional_type)]
@@ -61,6 +67,8 @@ impl Default for Config {
             show_quick_paste_hint: true,
             window_position_mode: WindowPositionMode::Monitor,
             app_paste_keymaps: Default::default(),
+            middle_click_delay_windows: vec!["^[Ff]irefox".to_string()],
+            middle_click_delay_patterns: vec![],
             layout: Default::default(),
             font: Default::default(),
             theme: Default::default(),
@@ -256,15 +264,30 @@ impl Config {
         let config_set: ConfigSet =
             toml::from_str(&config_content).context("Failed to parse config file")?;
 
-        let config = default_config
+        let mut config = default_config
             .with_optional(config_set.common)
             .with_optional(match selection_type {
                 SelectionType::CLIPBOARD => config_set.clipboard,
                 SelectionType::PRIMARY => config_set.primary,
             });
 
+        config.compile_middle_click_delay_patterns()?;
+
         debug!("config: {config:#?}");
         Ok(config)
+    }
+
+    fn compile_middle_click_delay_patterns(&mut self) -> Result<()> {
+        self.middle_click_delay_patterns = self
+            .middle_click_delay_windows
+            .iter()
+            .map(|pattern| {
+                Regex::new(pattern).with_context(|| {
+                    format!("invalid middle_click_delay_windows regex: {pattern:?}")
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(())
     }
 }
 

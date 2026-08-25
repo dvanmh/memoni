@@ -9,7 +9,7 @@ extern crate x11rb;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
-    fmt, mem,
+    fmt, mem, thread,
     time::{Duration, Instant},
 };
 
@@ -963,7 +963,7 @@ impl<'a> Selection<'a> {
     pub fn paste(
         &mut self,
         item_id: u64,
-        pointer_original_pos: (i16, i16),
+        original_pointer: (i16, i16, Option<Window>),
         modifier: PasteModifier,
     ) -> Result<()> {
         // Move paste item to the top
@@ -1035,18 +1035,60 @@ impl<'a> Selection<'a> {
             }
         } else if self.selection_atom == self.atoms.PRIMARY {
             info!(
-                "pasting into {focused_window} using middle mouse button at {pointer_original_pos:?}"
+                "pasting into {focused_window} using middle mouse button at ({}, {})",
+                original_pointer.0, original_pointer.1
             );
             let pointer_current_pos = conn.query_pointer(self.screen.root)?.reply()?;
-            move_pointer(pointer_original_pos.0, pointer_original_pos.1)?;
 
-            // middle mouse button
-            key(BUTTON_PRESS_EVENT, 2)?;
+            // Some windows (e.g., Firefox) don't receive paste event if memoni middle-clickes immediately
+            // after memoni window closes. For these, we can make memoni wait a moment before clicking.
+            let need_delay = original_pointer
+                .2
+                .and_then(|win| {
+                    get_window_class(conn, win)
+                        .inspect_err(|e| warn!("failed to get class of window under pointer: {e}"))
+                        .ok()
+                        .flatten()
+                })
+                .map(|(instance_name, class_name)| {
+                    let instance_matched = self.config
+                        .middle_click_delay_patterns
+                        .iter()
+                        .any(|re| re.is_match(&instance_name));
+                    if instance_matched {
+                        debug!("applying middle click delay workaround for window with instance '{instance_name}'");
+                        return true;
+                    }
+
+                    let class_matched = self.config
+                        .middle_click_delay_patterns
+                        .iter()
+                        .any(|re| re.is_match(&class_name));
+                    if class_matched {
+                        debug!("applying middle click delay workaround for window with class '{class_name}'");
+                        return true;
+                    }
+
+                    false
+                })
+                .unwrap_or(false);
+
+            if need_delay {
+                thread::sleep(Duration::from_millis(150));
+            }
+
+            move_pointer(original_pointer.0, original_pointer.1)?;
+            key(BUTTON_PRESS_EVENT, 2)?; // middle mouse button
+
+            if need_delay {
+                conn.sync()?;
+                thread::sleep(Duration::from_millis(2));
+            }
+
             key(BUTTON_RELEASE_EVENT, 2)?;
-
             move_pointer(pointer_current_pos.root_x, pointer_current_pos.root_y)?;
         }
-        conn.flush()?;
+        conn.sync()?;
 
         self.paste_item_id = Some(item_id);
         self.next_paste_modifier = Some(modifier);

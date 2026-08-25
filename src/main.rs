@@ -590,7 +590,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
             }
 
             if let Some(id) = paste_item_id {
-                selection.paste(id, window.win_opened_pointer_pos.get(), paste_modifier)?;
+                selection.paste(id, window.win_opened_pointer.get(), paste_modifier)?;
             }
 
             first_loop = false;
