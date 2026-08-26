@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cell::Cell,
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
@@ -42,6 +43,7 @@ pub type SelectionData = BTreeMap<String, Vec<u8>>;
 struct SelectionItemData {
     id: u64,
     data: SelectionData,
+    pinned: Cell<bool>,
 }
 
 self_cell!(
@@ -57,9 +59,14 @@ self_cell!(
 
 impl SelectionItem {
     pub fn create(id: u64, data: SelectionData) -> Self {
-        Self::new(SelectionItemData { id, data }, |item_data| {
-            extract_text_from_data(item_data.id, &item_data.data)
-        })
+        Self::new(
+            SelectionItemData {
+                id,
+                data,
+                pinned: Cell::new(false),
+            },
+            |item_data| extract_text_from_data(item_data.id, &item_data.data),
+        )
     }
 
     pub fn id(&self) -> u64 {
@@ -68,6 +75,14 @@ impl SelectionItem {
 
     pub fn data(&self) -> &SelectionData {
         &self.borrow_owner().data
+    }
+
+    pub fn is_pinned(&self) -> bool {
+        self.borrow_owner().pinned.get()
+    }
+
+    pub fn set_pinned(&mut self, pinned: bool) {
+        self.borrow_owner().pinned.set(pinned)
     }
 
     pub fn text_data(&self) -> &SelectionTextData<'_> {

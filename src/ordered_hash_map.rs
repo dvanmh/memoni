@@ -129,6 +129,15 @@ where
         }
     }
 
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
+        IterMut {
+            map: &mut self.map,
+            keys: &self.keys,
+            idx: 0,
+            back_idx: 0,
+        }
+    }
+
     pub fn binary_search_by<'a, F>(&'a self, mut f: F) -> Result<usize, usize>
     where
         F: FnMut((&'a K, &'a V)) -> Ordering,
@@ -163,6 +172,36 @@ where
             // If key was removed from map but still in keys vec, skip it
         }
 
+        None
+    }
+}
+
+pub struct IterMut<'a, K, V> {
+    map: *mut HashMap<K, V>,
+    keys: &'a VecDeque<K>,
+    idx: usize,
+    back_idx: usize,
+}
+
+impl<'a, K, V> Iterator for IterMut<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+    V: 'a,
+{
+    type Item = (&'a K, &'a mut V);
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.idx < self.keys.len() - self.back_idx {
+            let key = &self.keys[self.idx];
+            self.idx += 1;
+            // SAFETY: `self.keys` contains no duplicates, so each call to get_mut()
+            // returns a &mut V for a different entry
+            let val = unsafe { (*self.map).get_mut(key) };
+            if let Some(val) = val {
+                return Some((key, val));
+            }
+
+            // If key was removed from map but still in keys vec, skip it
+        }
         None
     }
 }

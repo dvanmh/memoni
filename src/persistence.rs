@@ -123,7 +123,7 @@ impl Persistence {
             _ => Err(anyhow!("invalid binary version")),
         };
 
-        let items = (match items {
+        let mut items = (match items {
             Ok(items) => Ok(items),
             Err(err) => {
                 debug!("decoding failed, trying to decode using version 1 format");
@@ -135,8 +135,16 @@ impl Persistence {
             }
         })?;
 
+        populate_pinned_flags(&mut items.0, items.1.pinned_count);
+
         info!("{} items loaded", items.0.len());
         Ok(items)
+    }
+}
+
+fn populate_pinned_flags(items: &mut OrderedHashMap<u64, SelectionItem>, pinned_count: usize) {
+    for (_, item) in items.iter_mut().take(pinned_count) {
+        item.set_pinned(true);
     }
 }
 

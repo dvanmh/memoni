@@ -29,7 +29,6 @@ use crate::{
     freedesktop_cache::get_cached_thumbnail,
     keymap_action::{KeyChord, ScrollAction},
     ordered_hash_map::OrderedHashMap,
-    selection::SelectionMetadata,
     selection_item::{self, ActedOnUris, MozUrl, SelectionItem},
     utils::is_image_mime,
     widgets::{clipboard_button::ClipboardButton, help_modal::HelpModal},
@@ -291,7 +290,6 @@ impl<'a> Ui<'a> {
         egui_input: RawInput,
         active_id: &mut u64,
         selection_items: &OrderedHashMap<u64, SelectionItem>,
-        selection_metadata: &SelectionMetadata,
         flow: UiFlow,
         scroll_actions: &[ScrollAction],
         pending_keys: &mut Vec<KeyChord>,
@@ -627,7 +625,7 @@ impl<'a> Ui<'a> {
 
                     for (i, (&id, item)) in item_it {
                         let is_active = id == *active_id;
-                        let is_pinned = i < selection_metadata.pinned_count;
+                        let is_pinned = item.is_pinned();
 
                         let mut btn_widget = self
                             .button_widgets

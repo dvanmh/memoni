@@ -884,12 +884,7 @@ impl<'a> Selection<'a> {
         let mut is_previously_seen = false;
         let mut new_item = None;
         if self.items.contains_key(&new_item_id) {
-            if self
-                .items
-                .iter()
-                .take(self.metadata.pinned_count)
-                .any(|(&id, _)| id == new_item_id)
-            {
+            if self.items.get(&new_item_id).is_some_and(|i| i.is_pinned()) {
                 debug!("selection is duplicated, old one is pinned, keeping old selection");
             } else {
                 debug!("selection is duplicated, removing old one");
@@ -1098,16 +1093,12 @@ impl<'a> Selection<'a> {
 
     /// Returns true if item is pinned, false if item is unpinned
     pub fn toggle_pin(&mut self, item_id: u64) -> Result<bool> {
-        let is_pinned = self
-            .items
-            .iter()
-            .take(self.metadata.pinned_count)
-            .any(|(&id, _)| id == item_id);
-
-        let Some(item) = self.items.remove(&item_id) else {
+        let Some(mut item) = self.items.remove(&item_id) else {
             bail!("item not found: {item_id}");
         };
+        let is_pinned = item.is_pinned();
 
+        item.set_pinned(!is_pinned);
         if is_pinned {
             self.metadata.pinned_count -= 1;
             self.items.insert(self.metadata.pinned_count, item_id, item);

@@ -456,9 +456,8 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                         KeyAction::Remove => {
                             let is_pinned = selection
                                 .items
-                                .iter()
-                                .take(selection.metadata.pinned_count)
-                                .any(|(&id, _)| id == active_id);
+                                .get(&active_id)
+                                .is_some_and(|item| item.is_pinned());
                             if is_pinned {
                                 info!("ignoring remove action on pinned item {active_id}");
                                 ui.show_error("Cannot remove pinned item");
@@ -539,7 +538,6 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     input.egui_input.take(),
                     &mut active_id,
                     &selection.items,
-                    &selection.metadata,
                     ui_flow,
                     &scroll_actions,
                     &mut keymap_action.pending_keys,
