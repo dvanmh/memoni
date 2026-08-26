@@ -1,16 +1,16 @@
 extern crate x11rb;
 
-use std::cell::Cell;
 use std::os::unix::ffi::OsStrExt as _;
+use std::{cell::Cell, iter::once};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 use log::{debug, info, trace, warn};
-use x11rb::connection::Connection;
 use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::{ConnectionExt as _, *};
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::xcb_ffi::XCBConnection;
+use x11rb::{connection::Connection, protocol::randr};
 
 use crate::config::{Config, Dimensions, LayoutConfig, WindowPositionMode};
 use crate::selection::SelectionType;
@@ -225,6 +225,7 @@ impl<'a> X11Window<'a> {
     }
 
     pub fn update_window_pos(&self) -> Result<()> {
+        info!("updating window position");
         let pointer = self.conn.query_pointer(self.screen.root)?.reply()?;
         let pointer_window =
             find_window_under_pointer(&self.conn, pointer.child, self.atoms.WM_STATE)?;
@@ -397,23 +398,22 @@ impl<'a> X11Window<'a> {
             conn,
             screen,
             atoms,
-            win_opened_pointer: win_opened_pointer_pos,
+            win_opened_pointer,
             config,
             ..
         } = self;
         let LayoutConfig {
-            window_dimensions: Dimensions { width, height },
-            pointer_gap: spacing,
+            window_dimensions,
+            pointer_gap,
             screen_edge_gap,
             ..
         } = config.layout;
-        let pointer_pos = win_opened_pointer_pos.get();
+        let width = window_dimensions.width as i32;
+        let height = window_dimensions.height as i32;
 
+        let pointer_pos = win_opened_pointer.get();
         let px = pointer_pos.0 as i32;
         let py = pointer_pos.1 as i32;
-
-        let width = width as i32;
-        let height = height as i32;
 
         let monitors = conn.randr_get_monitors(screen.root, true)?.reply()?;
         let pointer_monitor = monitors.monitors.iter().find(|m| {
@@ -433,40 +433,68 @@ impl<'a> X11Window<'a> {
             })
         });
 
-        match config.window_position_mode {
-            WindowPositionMode::Monitor => {
-                Ok(Self::position_by_monitor(focused_monitor, width, height))
-            }
-            WindowPositionMode::Pointer => Ok(Self::position_by_pointer(
-                pointer_monitor,
-                (px, py),
-                width,
-                height,
-                spacing,
-                screen_edge_gap,
-            )),
-            WindowPositionMode::Dynamic => {
-                let pointer_visible = self.pointer_visible()?;
-                if let Some(fm) = focused_monitor
-                    && (!pointer_visible
-                        || pointer_monitor
-                            .as_ref()
-                            .map(|pm| fm.name != pm.name)
-                            .unwrap_or(true))
-                {
-                    Ok(Self::position_by_monitor(focused_monitor, width, height))
-                } else {
-                    Ok(Self::position_by_pointer(
-                        pointer_monitor,
-                        (px, py),
-                        width,
-                        height,
-                        spacing,
-                        screen_edge_gap,
-                    ))
+        for (position_mode, is_fallback) in config
+            .window_position_mode
+            .iter()
+            .map(|m| (m, false))
+            .chain(once((&WindowPositionMode::Monitor, true)))
+        {
+            let position_result = match position_mode {
+                WindowPositionMode::Monitor => {
+                    Self::position_by_monitor(focused_monitor, width, height)
+                }
+                WindowPositionMode::Pointer => Self::position_by_location(
+                    &monitors.monitors,
+                    (px, py),
+                    width,
+                    height,
+                    pointer_gap,
+                    screen_edge_gap,
+                ),
+                WindowPositionMode::ActivePointer => {
+                    let pointer_visible = self.pointer_visible()?;
+                    let pointer_in_focused_monitor = focused_monitor
+                        .zip(pointer_monitor)
+                        .map(|(fm, pm)| fm.name == pm.name)
+                        .unwrap_or(false);
+                    if pointer_visible && pointer_in_focused_monitor {
+                        Self::position_by_location(
+                            &monitors.monitors,
+                            (px, py),
+                            width,
+                            height,
+                            pointer_gap,
+                            screen_edge_gap,
+                        )
+                    } else {
+                        Err(if !pointer_visible {
+                            anyhow!("pointer is not visible")
+                        } else {
+                            anyhow!("pointer is not in focused monitor")
+                        })
+                    }
+                }
+            };
+
+            match position_result {
+                Ok(pos) => {
+                    debug!(
+                        "{}window position mode {position_mode:?} is available, using its result",
+                        if is_fallback { "fallback " } else { "" }
+                    );
+                    return Ok(pos);
+                }
+                Err(err) => {
+                    debug!(
+                        "{}window position mode {position_mode:?} is not available: {err}",
+                        if is_fallback { "fallback " } else { "" }
+                    );
                 }
             }
         }
+
+        debug!("no window position modes are available, falling back to zero-value position");
+        Ok((0, 0, false))
     }
 
     fn pointer_visible(&self) -> Result<bool> {
@@ -478,61 +506,72 @@ impl<'a> X11Window<'a> {
     }
 
     fn position_by_monitor(
-        focused_monitor: Option<&x11rb::protocol::randr::MonitorInfo>,
+        monitor: Option<&randr::MonitorInfo>,
         win_width: i32,
         win_height: i32,
-    ) -> (i16, i16, bool) {
-        if let Some(fm) = focused_monitor {
-            let x = (fm.width as i32 - win_width) / 2 + fm.x as i32;
-            let y = (fm.height as i32 - win_height) / 2 + fm.y as i32;
-            (
-                x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-                false,
-            )
-        } else {
-            (0, 0, false)
-        }
+    ) -> Result<(i16, i16, bool)> {
+        monitor
+            .map(|m| {
+                let x = (m.width as i32 - win_width) / 2 + m.x as i32;
+                let y = (m.height as i32 - win_height) / 2 + m.y as i32;
+                (
+                    x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                    y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                    false,
+                )
+            })
+            .ok_or_else(|| anyhow!("no monitor for positioning"))
     }
 
-    fn position_by_pointer(
-        pointer_monitor: Option<&x11rb::protocol::randr::MonitorInfo>,
-        (px, py): (i32, i32),
+    fn position_by_location(
+        monitors: &[randr::MonitorInfo],
+        (x, y): (i32, i32),
         win_width: i32,
         win_height: i32,
-        spacing: i32,
-        screen_edge_gap: i32,
-    ) -> (i16, i16, bool) {
-        let (mx, my, mw, mh) = pointer_monitor
-            .map(|pm| (pm.x as i32, pm.y as i32, pm.width as i32, pm.height as i32))
-            .unwrap_or((0, 0, 0, 0));
+        location_gap: i32,
+        monitor_edge_gap: i32,
+    ) -> Result<(i16, i16, bool)> {
+        let Some(monitor) = monitors.iter().find(|m| {
+            x >= m.x as i32
+                && x < m.x as i32 + m.width as i32
+                && y >= m.y as i32
+                && y < m.y as i32 + m.height as i32
+        }) else {
+            bail!("location ({x}, {y}) is outside of all monitors");
+        };
+        let (mx, my, mw, mh) = (
+            monitor.x as i32,
+            monitor.y as i32,
+            monitor.width as i32,
+            monitor.height as i32,
+        );
 
-        // Keep the clamp range valid: it is empty when the pointer is outside
-        // every monitor or the window is larger than the monitor; i32::clamp
-        // panics on min > max. Fall back to the near screen edge in that case.
-        let min_x = mx + screen_edge_gap;
-        let place_right = px + win_width + spacing <= mx + mw - spacing;
+        let min_x = mx + monitor_edge_gap;
+        let max_x = (mx + mw - win_width - monitor_edge_gap).max(min_x);
+        let min_y = my + monitor_edge_gap;
+        let max_y = (my + mh - win_height - monitor_edge_gap).max(min_y);
+
+        let place_right = x + win_width + location_gap <= mx + mw - location_gap;
+        let place_below = y + win_height + location_gap <= my + mh - location_gap;
+
         let x = (if place_right {
-            px + spacing
+            x + location_gap
         } else {
-            px - win_width - spacing
+            x - win_width - location_gap
         })
-        .clamp(min_x, (mx + mw - win_width - screen_edge_gap).max(min_x));
-
-        let min_y = my + screen_edge_gap;
-        let place_below = py + win_height + spacing <= my + mh - spacing;
+        .clamp(min_x, max_x);
         let y = (if place_below {
-            py + spacing
+            y + location_gap
         } else {
-            py - win_height - spacing
+            y - win_height - location_gap
         })
-        .clamp(min_y, (my + mh - win_height - screen_edge_gap).max(min_y));
+        .clamp(min_y, max_y);
 
-        (
-            x.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-            y.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        Ok((
+            x.clamp(i16::MIN.into(), i16::MAX.into()) as i16,
+            y.clamp(i16::MIN.into(), i16::MAX.into()) as i16,
             !place_below,
-        )
+        ))
     }
 }
 

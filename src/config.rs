@@ -39,7 +39,8 @@ pub struct Config {
     pub scroll_bar_auto_hide: bool,
     pub drag_scroll: bool,
     pub show_quick_paste_hint: bool,
-    pub window_position_mode: WindowPositionMode,
+    #[serde_as(as = "OneOrMany<_>")]
+    pub window_position_mode: Vec<WindowPositionMode>,
 
     #[serde_as(as = "HashMap<_, OneOrMany<_>>")]
     pub app_paste_keymaps: HashMap<String, Vec<KeyStroke>>,
@@ -65,7 +66,7 @@ impl Default for Config {
             scroll_bar_auto_hide: false,
             drag_scroll: false,
             show_quick_paste_hint: true,
-            window_position_mode: WindowPositionMode::Monitor,
+            window_position_mode: vec![],
             app_paste_keymaps: Default::default(),
             middle_click_delay_windows: vec!["^[Ff]irefox".to_string()],
             middle_click_delay_patterns: vec![],
@@ -226,7 +227,7 @@ fn default_clipboard_config() -> OptionalConfig {
             ribbon: Some(Color(0x550000ff)),
             ..Default::default()
         }),
-        window_position_mode: Some(WindowPositionMode::Monitor),
+        window_position_mode: Some(vec![WindowPositionMode::Monitor]),
         ..Default::default()
     }
 }
@@ -237,7 +238,7 @@ fn default_primary_config() -> OptionalConfig {
             ribbon: Some(Color(0x30ff0000)),
             ..Default::default()
         }),
-        window_position_mode: Some(WindowPositionMode::Pointer),
+        window_position_mode: Some(vec![WindowPositionMode::Pointer]),
         ..Default::default()
     }
 }
@@ -399,11 +400,11 @@ impl From<Dimensions> for egui::Vec2 {
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WindowPositionMode {
     Monitor,
     Pointer,
-    Dynamic,
+    ActivePointer,
 }
 
 #[derive(Deserialize)]

@@ -26,12 +26,20 @@ show_quick_paste_hint = true
 
 # Window positioning mode
 #
-# "monitor" - Always center window in the focused monitor
-# "pointer" - Always follow the mouse pointer
-# "dynamic" - Follow pointer if it's visible and in the focused monitor; otherwise center in focused monitor
+# List of window positioning strategies tried in sequence. Each strategy is used if it
+# can produce a valid position, otherwise the next one is tried. If no strategies is
+# usable, `"monitor"` will be used as fallback.
 #
-# default: CLIPBOARD - "monitor", PRIMARY - "pointer"
-window_position_mode = "dynamic"
+# Available strategies:
+#   "monitor"        - Center in the focused monitor
+#   "pointer"        - Follow the mouse pointer
+#   "active_pointer" - Follow pointer if it's visible and in the focused monitor
+#
+# Example: `["active_pointer", "monitor"]` follows the pointer when possible,
+# otherwise centers in the focused monitor.
+#
+# default: CLIPBOARD - ["monitor"], PRIMARY - ["pointer"]
+window_position_mode = ["active_pointer", "monitor"]
 
 # Window classes that need middle-click paste delay
 #
