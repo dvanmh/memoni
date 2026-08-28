@@ -311,8 +311,8 @@ impl<'a> Ui<'a> {
         }
 
         let items_size = selection_items.len();
-        let items_removed = items_size < self.item_widget_ids.len();
-        let active_item_removed = items_removed && !selection_items.contains_key(active_id);
+        let items_reduced = items_size < self.item_widget_ids.len();
+        let active_item_removed = !selection_items.contains_key(active_id);
         let prev_active_rect = self
             .scroll_area_info
             .as_ref()
@@ -403,9 +403,9 @@ impl<'a> Ui<'a> {
                  scroll to the bottom, we need to know the height of newly added items beforehand \
                  to correctly calculate the required scroll offset.",
             );
-        } else if items_removed {
+        } else if items_reduced {
             self.egui_ctx
-                .request_discard("Recalculate scroll area's content size when items got removed");
+                .request_discard("Recalculate scroll area's content size when the number of items reduced");
         } else if self.prev_active_idx != active_idx {
             self.egui_ctx.request_discard(
                 "Recalculate scroll area's content rects when active item got moved",
@@ -549,7 +549,7 @@ impl<'a> Ui<'a> {
                         .prev_is_scrolling
                         .is_some_and(|prev| prev != scroll_area.is_scrolling);
 
-                if sets_default_scroll_offset || sets_active_scroll_offset || items_removed {
+                if sets_default_scroll_offset || sets_active_scroll_offset || items_reduced {
                     let padding = layout.window_padding.y as f32;
                     let scroll_rect = scroll_area.rect;
                     let scroll_offset = scroll_area.offset;
@@ -562,7 +562,7 @@ impl<'a> Ui<'a> {
                         }
                     } else
                     // Force content to be pushed down to fill the removed items' space when at the bottom of the scroll area
-                    if items_removed
+                    if items_reduced
                         && content_overflowed
                         && scroll_offset + scroll_rect.height() > scroll_content_size
                     {
