@@ -1,10 +1,17 @@
-use crate::{utils::keysym_to_egui_key, x11_key_converter::X11KeyConverter, x11_window::X11Window};
+use crate::{
+    utils::{is_letter_keysym, keysym_to_egui_key},
+    x11_key_converter::X11KeyConverter,
+    x11_window::X11Window,
+};
 use anyhow::Result;
 use egui::{
     Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect, TouchPhase, Vec2,
 };
 use log::trace;
-use x11rb::protocol::{Event as X11Event, xproto::ConnectionExt as _};
+use x11rb::protocol::{
+    Event as X11Event,
+    xproto::{ConnectionExt as _, KeyButMask},
+};
 use xkeysym::Keysym;
 
 pub struct Input<'a> {
@@ -109,12 +116,22 @@ impl<'a> Input<'a> {
                         trace!(
                             "key: {key:?}, pressed={pressed}, keysym={keysym:?}, keycode={keycode}"
                         );
+
+                        let caps_locked = ev.state.contains(KeyButMask::LOCK);
+                        let modifiers = if caps_locked && is_letter_keysym(keysym) {
+                            let mut modifiers_with_caps = *modifiers;
+                            modifiers_with_caps.shift = !modifiers_with_caps.shift;
+                            modifiers_with_caps
+                        } else {
+                            *modifiers
+                        };
+
                         break 'blk Some(Event::Key {
                             key,
                             physical_key: None,
                             pressed,
                             repeat: false, // egui will fill this in for us!
-                            modifiers: *modifiers,
+                            modifiers,
                         });
                     } else {
                         trace!("unknown keysym: {keysym:?}");

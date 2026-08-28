@@ -119,6 +119,38 @@ pub fn keysym_to_egui_key(ks: Keysym) -> Option<Key> {
     })
 }
 
+pub fn is_letter_keysym(ks: Keysym) -> bool {
+    matches!(
+        ks,
+        Keysym::a
+            | Keysym::b
+            | Keysym::c
+            | Keysym::d
+            | Keysym::e
+            | Keysym::f
+            | Keysym::g
+            | Keysym::h
+            | Keysym::i
+            | Keysym::j
+            | Keysym::k
+            | Keysym::l
+            | Keysym::m
+            | Keysym::n
+            | Keysym::o
+            | Keysym::p
+            | Keysym::q
+            | Keysym::r
+            | Keysym::s
+            | Keysym::t
+            | Keysym::u
+            | Keysym::v
+            | Keysym::w
+            | Keysym::x
+            | Keysym::y
+            | Keysym::z
+    )
+}
+
 pub fn plaintext_mime_score(mime: &str) -> Option<usize> {
     // low to high
     const TEXT_MIMES_ORDER: &[&str] = &[
