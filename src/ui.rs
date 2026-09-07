@@ -839,7 +839,7 @@ impl<'a> Ui<'a> {
 
         let galley = painter.layout(
             label,
-            FontId::proportional(config.font.pending_keys_text_size),
+            FontId::proportional(config.font.overlay_text_size),
             fg_color,
             rect.width() - margin.x * 2.0 - padding.x * 2.0,
         );
@@ -866,7 +866,7 @@ impl<'a> Ui<'a> {
 
         let galley = painter.layout(
             message.to_owned(),
-            FontId::proportional(config.font.pending_keys_text_size),
+            FontId::proportional(config.font.overlay_text_size),
             fg_color,
             rect.width() - margin.x * 2.0 - padding.x * 2.0,
         );

@@ -148,7 +148,7 @@ pub struct FontConfig {
     #[serde_as(as = "OneOrMany<_>")]
     pub y_offset_factors: Vec<f32>,
     pub underline_offset: f32,
-    pub pending_keys_text_size: f32,
+    pub overlay_text_size: f32,
 }
 
 impl Default for FontConfig {
@@ -159,7 +159,7 @@ impl Default for FontConfig {
             secondary_size: 11.0,
             y_offset_factors: vec![],
             underline_offset: 0.0,
-            pending_keys_text_size: 16.0,
+            overlay_text_size: 16.0,
         }
     }
 }

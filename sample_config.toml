@@ -209,10 +209,10 @@ y_offset_factor = -0.05
 # default: 0
 underline_offset = -2
 
-# Font size (pt) for the pending keys overlay text
+# Font size (pt) for the overlay texts (pending keys, error)
 #
 # default: 16
-pending_keys_text_size = 14
+overlay_text_size = 14
 
 
 # Colors (hex; can be #RRGGBB or #RRGGBBAA)
