@@ -1,5 +1,5 @@
 use anyhow::Result;
-use egui::scroll_area::State as ScrollAreaState;
+use egui::{Rect, scroll_area::State as ScrollAreaState};
 
 pub trait ScrollAreaStateExt {
     fn reset_velocity(ctx: &egui::Context, scroll_area_id: egui::Id) -> Result<()>;
@@ -20,5 +20,16 @@ impl ScrollAreaStateExt for ScrollAreaState {
         }
 
         Ok(())
+    }
+}
+
+pub trait RectExt {
+    fn flipped_y(self) -> Self;
+}
+
+impl RectExt for Rect {
+    #[inline]
+    fn flipped_y(self) -> Self {
+        self.with_min_y(-self.max.y).with_max_y(-self.min.y)
     }
 }

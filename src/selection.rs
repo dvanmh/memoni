@@ -1109,6 +1109,13 @@ impl<'a> Selection<'a> {
             Ok(true)
         }
     }
+
+    pub fn get_first_unpinned_item(&self) -> u64 {
+        self.items
+            .get_by_index(self.metadata.pinned_count)
+            .map(|(id, _)| *id)
+            .unwrap_or(0)
+    }
 }
 
 fn get_or_create_mime_atom(

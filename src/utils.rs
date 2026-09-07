@@ -119,35 +119,97 @@ pub fn keysym_to_egui_key(ks: Keysym) -> Option<Key> {
     })
 }
 
-pub fn is_letter_keysym(ks: Keysym) -> bool {
+pub fn is_letter_key(ks: Key) -> bool {
     matches!(
         ks,
-        Keysym::a
-            | Keysym::b
-            | Keysym::c
-            | Keysym::d
-            | Keysym::e
-            | Keysym::f
-            | Keysym::g
-            | Keysym::h
-            | Keysym::i
-            | Keysym::j
-            | Keysym::k
-            | Keysym::l
-            | Keysym::m
-            | Keysym::n
-            | Keysym::o
-            | Keysym::p
-            | Keysym::q
-            | Keysym::r
-            | Keysym::s
-            | Keysym::t
-            | Keysym::u
-            | Keysym::v
-            | Keysym::w
-            | Keysym::x
-            | Keysym::y
-            | Keysym::z
+        Key::A
+            | Key::B
+            | Key::C
+            | Key::D
+            | Key::E
+            | Key::F
+            | Key::G
+            | Key::H
+            | Key::I
+            | Key::J
+            | Key::K
+            | Key::L
+            | Key::M
+            | Key::N
+            | Key::O
+            | Key::P
+            | Key::Q
+            | Key::R
+            | Key::S
+            | Key::T
+            | Key::U
+            | Key::V
+            | Key::W
+            | Key::X
+            | Key::Y
+            | Key::Z
+    )
+}
+
+pub fn is_char_key(ks: Key) -> bool {
+    matches!(
+        ks,
+        Key::Space
+            | Key::Tab
+            | Key::A
+            | Key::B
+            | Key::C
+            | Key::D
+            | Key::E
+            | Key::F
+            | Key::G
+            | Key::H
+            | Key::I
+            | Key::J
+            | Key::K
+            | Key::L
+            | Key::M
+            | Key::N
+            | Key::O
+            | Key::P
+            | Key::Q
+            | Key::R
+            | Key::S
+            | Key::T
+            | Key::U
+            | Key::V
+            | Key::W
+            | Key::X
+            | Key::Y
+            | Key::Z
+            | Key::Num1
+            | Key::Num2
+            | Key::Num3
+            | Key::Num4
+            | Key::Num5
+            | Key::Num6
+            | Key::Num7
+            | Key::Num8
+            | Key::Num9
+            | Key::Num0
+            | Key::Colon
+            | Key::Comma
+            | Key::Minus
+            | Key::Period
+            | Key::Plus
+            | Key::Equals
+            | Key::Semicolon
+            | Key::OpenBracket
+            | Key::CloseBracket
+            | Key::Backslash
+            | Key::Slash
+            | Key::Quote
+            | Key::Backtick
+            | Key::Pipe
+            | Key::Questionmark
+            | Key::Exclamationmark
+            | Key::OpenCurlyBracket
+            | Key::CloseCurlyBracket
     )
 }
 

@@ -7,6 +7,7 @@ pub mod keymap_action;
 pub mod opengl_context;
 pub mod ordered_hash_map;
 pub mod persistence;
+pub mod search;
 pub mod selection;
 pub mod selection_item;
 pub mod timerfd_source;
@@ -22,5 +23,6 @@ pub use ext::ScrollAreaStateExt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AppMode {
     Normal,
+    Search,
     Help,
 }

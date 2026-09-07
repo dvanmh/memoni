@@ -1,5 +1,7 @@
+use std::iter;
+
 use crate::{
-    utils::{is_letter_keysym, keysym_to_egui_key},
+    utils::{is_char_key, is_letter_key, keysym_to_egui_key},
     x11_key_converter::X11KeyConverter,
     x11_window::X11Window,
 };
@@ -7,7 +9,7 @@ use anyhow::Result;
 use egui::{
     Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect, TouchPhase, Vec2,
 };
-use log::trace;
+use log::{debug, trace};
 use x11rb::protocol::{
     Event as X11Event,
     xproto::{ConnectionExt as _, KeyButMask},
@@ -42,8 +44,7 @@ impl<'a> Input<'a> {
 
     pub fn handle_event(&mut self, event: &X11Event) {
         let modifiers = &mut self.modifiers;
-
-        let egui_event = match event {
+        let egui_events: Box<dyn Iterator<Item = Event>> = match event {
             X11Event::ButtonPress(ev) | X11Event::ButtonRelease(ev) if ev.detail <= 3 => {
                 let pressed = matches!(event, X11Event::ButtonPress(_));
                 let pointer_button = match ev.detail {
@@ -59,12 +60,16 @@ impl<'a> Input<'a> {
                     "pointer button: {pointer_button:?}, pressed={pressed}, root=({}, {}), relative=({}, {})",
                     ev.root_x, ev.root_y, rel_pos.x, rel_pos.y
                 );
-                pointer_button.map(|button| Event::PointerButton {
-                    pos: rel_pos,
-                    button,
-                    pressed,
-                    modifiers: *modifiers,
-                })
+                Box::new(
+                    pointer_button
+                        .map(|button| Event::PointerButton {
+                            pos: rel_pos,
+                            button,
+                            pressed,
+                            modifiers: *modifiers,
+                        })
+                        .into_iter(),
+                )
             }
             X11Event::ButtonPress(ev) | X11Event::ButtonRelease(ev) => {
                 let delta = match ev.detail {
@@ -76,71 +81,92 @@ impl<'a> Input<'a> {
                 };
 
                 trace!("mouse wheel delta: {delta:?}");
-                delta.map(|d| Event::MouseWheel {
-                    unit: MouseWheelUnit::Line,
-                    delta: d,
-                    modifiers: *modifiers,
-                    phase: TouchPhase::Move,
-                })
+                Box::new(
+                    delta
+                        .map(|d| Event::MouseWheel {
+                            unit: MouseWheelUnit::Line,
+                            delta: d,
+                            modifiers: *modifiers,
+                            phase: TouchPhase::Move,
+                        })
+                        .into_iter(),
+                )
             }
             X11Event::KeyPress(ev) | X11Event::KeyRelease(ev) => 'blk: {
                 let pressed = matches!(event, X11Event::KeyPress(_));
                 let keycode = ev.detail;
 
-                if let Some(keysym) = self.key_converter.keycode_to_keysym(keycode.into()) {
-                    if keysym.is_modifier_key() {
-                        let mut modifiers_updated = false;
-                        if keysym == Keysym::Alt_L || keysym == Keysym::Alt_R {
-                            modifiers_updated = true;
-                            modifiers.alt = pressed;
-                        }
-                        if keysym == Keysym::Control_L || keysym == Keysym::Control_R {
-                            modifiers_updated = true;
-                            modifiers.ctrl = pressed;
-                        }
-                        if keysym == Keysym::Shift_L || keysym == Keysym::Shift_R {
-                            modifiers_updated = true;
-                            modifiers.shift = pressed;
-                        }
+                let mut event_iter: Box<dyn Iterator<Item = Event>> = Box::new(iter::empty());
 
-                        break 'blk if modifiers_updated {
-                            trace!("modifiers updated: {modifiers:?}");
-                            Some(Event::ModifiersChanged(*modifiers))
-                        } else {
-                            trace!("ignoring modifier: {keysym:?}");
-                            None
-                        };
-                    }
-
-                    if let Some(key) = keysym_to_egui_key(Keysym::new(keysym.into())) {
-                        trace!(
-                            "key: {key:?}, pressed={pressed}, keysym={keysym:?}, keycode={keycode}"
-                        );
-
-                        let caps_locked = ev.state.contains(KeyButMask::LOCK);
-                        let modifiers = if caps_locked && is_letter_keysym(keysym) {
-                            let mut modifiers_with_caps = *modifiers;
-                            modifiers_with_caps.shift = !modifiers_with_caps.shift;
-                            modifiers_with_caps
-                        } else {
-                            *modifiers
-                        };
-
-                        break 'blk Some(Event::Key {
-                            key,
-                            physical_key: None,
-                            pressed,
-                            repeat: false, // egui will fill this in for us!
-                            modifiers,
-                        });
-                    } else {
-                        trace!("unknown keysym: {keysym:?}");
-                    }
-                } else {
+                let Some(keysym) = self.key_converter.keycode_to_keysym(keycode.into()) else {
                     trace!("unknown keycode: {keycode}");
+                    break 'blk event_iter;
+                };
+
+                if keysym.is_modifier_key() {
+                    let mut modifiers_updated = false;
+                    if keysym == Keysym::Alt_L || keysym == Keysym::Alt_R {
+                        modifiers_updated = true;
+                        modifiers.alt = pressed;
+                    }
+                    if keysym == Keysym::Control_L || keysym == Keysym::Control_R {
+                        modifiers_updated = true;
+                        modifiers.ctrl = pressed;
+                    }
+                    if keysym == Keysym::Shift_L || keysym == Keysym::Shift_R {
+                        modifiers_updated = true;
+                        modifiers.shift = pressed;
+                    }
+
+                    if !modifiers_updated {
+                        trace!("ignoring modifier: {keysym:?}");
+                        break 'blk event_iter;
+                    }
+
+                    trace!("modifiers updated: {modifiers:?}");
+                    event_iter =
+                        Box::new(event_iter.chain(iter::once(Event::ModifiersChanged(*modifiers))))
                 }
 
-                None
+                let Some(key) = keysym_to_egui_key(Keysym::new(keysym.into())) else {
+                    trace!("unknown keysym: {keysym:?}");
+                    break 'blk event_iter;
+                };
+
+                let caps_locked = ev.state.contains(KeyButMask::LOCK);
+                let modifiers = if caps_locked && is_letter_key(key) {
+                    let mut modifiers_with_caps = *modifiers;
+                    modifiers_with_caps.shift = !modifiers_with_caps.shift;
+                    modifiers_with_caps
+                } else {
+                    *modifiers
+                };
+
+                trace!("key: {key:?}, pressed={pressed}, keysym={keysym:?}, keycode={keycode}");
+                event_iter = Box::new(event_iter.chain(iter::once(Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false, // egui will fill this in for us!
+                    modifiers,
+                })));
+
+                if pressed && is_char_key(key) && (modifiers.is_none() || modifiers.shift_only()) {
+                    let column = if modifiers.shift { 1 } else { 0 };
+                    if let Some(ch_keysym) = self
+                        .key_converter
+                        .keycode_to_keysym_column(keycode.into(), column)
+                        && let Some(c) = ch_keysym.key_char()
+                    {
+                        trace!("text: {c:?}, keysym={ch_keysym:?}, keycode={keycode}");
+                        event_iter =
+                            Box::new(event_iter.chain(iter::once(Event::Text(c.to_string()))));
+                    } else {
+                        debug!("received unconvertable char keysym: {keysym:?}, keycode={keycode}");
+                    }
+                }
+
+                event_iter
             }
             X11Event::MotionNotify(ev) => {
                 let (x, y) = self.window.get_current_win_pos();
@@ -149,14 +175,12 @@ impl<'a> Input<'a> {
                     "pointer moved: root=({}, {}), relative=({}, {})",
                     ev.root_x, ev.root_y, rel_pos.x, rel_pos.y
                 );
-                Some(Event::PointerMoved(rel_pos))
+                Box::new(iter::once(Event::PointerMoved(rel_pos)))
             }
-            _ => None,
+            _ => Box::new(iter::empty()),
         };
 
-        if let Some(egui_event) = egui_event {
-            self.egui_input.events.push(egui_event);
-        }
+        self.egui_input.events.extend(egui_events);
     }
 
     pub fn update_pointer_pos(&mut self) -> Result<()> {

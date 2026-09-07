@@ -2,18 +2,19 @@ use anyhow::{Result, anyhow, bail};
 use egui::Modifiers;
 use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
-use memoni::AppMode;
 use memoni::config::Config;
 use memoni::input::Input;
 use memoni::keymap_action::{
     KeyAction, KeymapAction, PasteModifier, PointerAction, SimpleScrollAction,
 };
 use memoni::persistence::Persistence;
+use memoni::search::Search;
 use memoni::selection::Selection;
 use memoni::timerfd_source::TimerfdSource;
 use memoni::ui::{Ui, UiFlow};
 use memoni::x11_key_converter::X11KeyConverter;
 use memoni::x11_window::X11Window;
+use memoni::{AppMode, ordered_hash_map::OrderedHashMapView};
 use memoni::{opengl_context::OpenGLContext, selection::SelectionType};
 use mio::unix::SourceFd;
 use signal_hook::consts::TERM_SIGNALS;
@@ -231,6 +232,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     let key_converter = X11KeyConverter::new(&window.conn)?;
     let mut input = Input::new(&window, &key_converter)?;
     let mut keymap_action = KeymapAction::new()?;
+    let mut search = Search::new();
 
     let mut persistence = Persistence::new(args.selection, &display_id)?;
     let mut selection = Selection::new(
@@ -273,12 +275,9 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     let main_loop_result = (|| -> Result<()> {
         let mut window_shown = false;
         let mut pointer_button_press_count = 0;
-        let mut active_id = selection
-            .items
-            .get_by_index(0)
-            .map(|(id, _)| *id)
-            .unwrap_or(0);
+        let mut active_id = selection.get_first_unpinned_item();
         let mut mode = AppMode::Normal;
+        let mut prev_mode = mode;
         let mut first_loop = true;
 
         info!("starting main event loop");
@@ -287,6 +286,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
             let mut will_hide_window = false;
             let mut paste_item_id = None;
             let mut paste_modifier = PasteModifier::default();
+            let mut quick_paste_index = None;
 
             // non-blocking when window is visible or first-loop pre-rendering, blocking otherwise
             let poll_timeout = if window_shown || first_loop {
@@ -409,6 +409,12 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                         ui.build_button_widget(new_item)?;
                     }
 
+                    if mode == AppMode::Search {
+                        search.refresh(&selection.items);
+                        active_id = search.visible_ids.first().copied().unwrap_or(0);
+                        ui.reset_scroll_offset();
+                    }
+
                     persistence.save_selection_data(&selection.items, &selection.metadata)?;
                     items_updated = true;
                 }
@@ -429,11 +435,8 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 window.update_window_pos()?;
                 input.update_pointer_pos()?;
                 ui.reset();
-                active_id = selection
-                    .items
-                    .get_by_index(selection.metadata.pinned_count)
-                    .map(|(id, _)| *id)
-                    .unwrap_or(0);
+                search.reset();
+                active_id = selection.get_first_unpinned_item();
             }
 
             if first_loop || items_updated || window_shown || will_show_window {
@@ -481,19 +484,16 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                             persistence
                                 .save_selection_data(&selection.items, &selection.metadata)?;
                         }
-                        KeyAction::QuickPaste(index) => {
-                            if let Some((&id, _)) = selection.items.get_by_index(index) {
-                                info!(
-                                    "quickpaste item {id} (index {index}) selected by key action, hiding window"
-                                );
-                                will_hide_window = true;
-                                paste_item_id = Some(id);
-                            }
-                        }
+                        KeyAction::QuickPaste(index) => quick_paste_index = Some(index),
 
                         KeyAction::ShowHelp => {
                             info!("switching to Help mode");
                             mode = AppMode::Help;
+                        }
+                        KeyAction::ShowSearch => {
+                            info!("opening search");
+                            search.reset();
+                            mode = AppMode::Search;
                         }
                         KeyAction::SimpleScroll(direction) => {
                             let key = match direction {
@@ -521,12 +521,39 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                 info!("received Close action in Normal mode, hiding window");
                                 will_hide_window = true;
                             }
+                            AppMode::Search => {
+                                info!("exiting search mode");
+                                active_id = selection.get_first_unpinned_item();
+                                ui.reset_scroll_offset();
+                                mode = AppMode::Normal;
+                            }
                             AppMode::Help => {
                                 info!("switching to Normal mode");
                                 mode = AppMode::Normal;
                             }
                         },
                     }
+                }
+
+                if mode != prev_mode && mode == AppMode::Search {
+                    search.refresh(&selection.items);
+                }
+
+                let selection_items_view = match mode {
+                    AppMode::Search => {
+                        OrderedHashMapView::new(&selection.items.map, &search.visible_ids)
+                    }
+                    _ => selection.items.to_view(),
+                };
+
+                if let Some(index) = quick_paste_index
+                    && let Some((&id, _)) = selection_items_view.get_by_index(index)
+                {
+                    info!(
+                        "quickpaste item {id} (index {index}) selected by key action, hiding window"
+                    );
+                    will_hide_window = true;
+                    paste_item_id = Some(id);
                 }
 
                 let ui_flow = if window.is_win_placed_above_pointer() {
@@ -536,12 +563,13 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 };
                 let (full_output, clicked_item) = ui.run(
                     input.egui_input.take(),
-                    &mut active_id,
-                    &selection.items,
+                    mode,
                     ui_flow,
+                    &selection_items_view,
                     &scroll_actions,
+                    &mut active_id,
                     &mut keymap_action.pending_keys,
-                    mode == AppMode::Help,
+                    &mut search.query,
                 )?;
 
                 if let Some(clicked_id) = clicked_item {
@@ -591,7 +619,18 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 selection.paste(id, window.win_opened_pointer.get(), paste_modifier)?;
             }
 
+            if mode == AppMode::Search && search.query_changed() {
+                search.refresh(&selection.items);
+                active_id = if search.query.is_empty() {
+                    selection.get_first_unpinned_item()
+                } else {
+                    search.visible_ids.first().copied().unwrap_or(0)
+                };
+                ui.reset_scroll_offset();
+            }
+
             first_loop = false;
+            prev_mode = mode;
         }
         Ok(())
     })();

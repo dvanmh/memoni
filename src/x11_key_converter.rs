@@ -60,12 +60,16 @@ impl<'a> X11KeyConverter<'a> {
     }
 
     pub fn keycode_to_keysym(&self, keycode: KeyCode) -> Option<Keysym> {
+        self.keycode_to_keysym_column(keycode, 0)
+    }
+
+    pub fn keycode_to_keysym_column(&self, keycode: KeyCode, column: u8) -> Option<Keysym> {
         let min_keycode = *self.min_keycode.borrow();
         let mapping = self.mapping.borrow();
 
         xkeysym_keycode_to_keysym(
             keycode,
-            0,
+            column,
             min_keycode.into(),
             mapping.keysyms_per_keycode,
             &mapping.keysyms,

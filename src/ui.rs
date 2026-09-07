@@ -5,6 +5,7 @@ use std::{
     io::Read as _,
     mem,
     path::{Path, PathBuf},
+    rc::Rc,
     str::FromStr as _,
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
@@ -13,9 +14,11 @@ use std::{
 use anyhow::{Result, anyhow};
 use egui::{
     Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak,
-    FullOutput, Id, LayerId, Order, Painter, RawInput, Rect, RichText, Stroke, TextureHandle,
-    TextureOptions, Vec2, epaint,
-    scroll_area::{DragScroll, ScrollAreaOutput, ScrollSource},
+    FullOutput, Id, LayerId, Order, Pos2, RawInput, Rect, RichText, Stroke, TextureHandle,
+    TextureOptions, Vec2,
+    emath::GuiRounding as _,
+    epaint,
+    scroll_area::{DragScroll, ScrollSource},
 };
 use fontconfig::Fontconfig;
 use image::{GenericImageView, RgbaImage};
@@ -23,12 +26,13 @@ use log::{debug, error, info, log_enabled, trace, warn};
 use xdg_mime::SharedMimeInfo;
 
 use crate::{
-    ScrollAreaStateExt,
+    AppMode, ScrollAreaStateExt,
     color::parse_color,
     config::{Config, Dimensions, LayoutConfig, ThemeConfig},
+    ext::RectExt as _,
     freedesktop_cache::get_cached_thumbnail,
     keymap_action::{KeyChord, ScrollAction},
-    ordered_hash_map::OrderedHashMap,
+    ordered_hash_map::OrderedHashMapView,
     selection_item::{self, ActedOnUris, MozUrl, SelectionItem},
     utils::is_image_mime,
     widgets::{clipboard_button::ClipboardButton, help_modal::HelpModal},
@@ -38,6 +42,16 @@ use crate::{
 pub enum UiFlow {
     TopToBottom,
     BottomToTop,
+}
+
+impl UiFlow {
+    pub fn flipped(self) -> Self {
+        use UiFlow::*;
+        match self {
+            TopToBottom => BottomToTop,
+            BottomToTop => TopToBottom,
+        }
+    }
 }
 
 struct ImageInfo {
@@ -86,37 +100,45 @@ const NOTO_EMOJI: &[u8] = include_bytes!(concat!(
 
 #[derive(Debug)]
 struct ScrollAreaInfo {
-    id: egui::Id,
-    rect: Rect,
-    content_rects: HashMap<u64, Rect>,
+    id: Option<egui::Id>,
+    content_size: f32,
+    inner_rect: Rect,
     offset: f32,
     is_scrolling: bool,
-    prev_is_scrolling: Option<bool>,
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
-enum ActiveSource {
-    ScrollAction,
-    Hovering,
-    External,
+#[derive(Debug)]
+struct PrevPass {
+    scroll_output: ScrollAreaInfo,
+    item_widgets: HashMap<u64, (egui::Id, Rect)>,
+}
+
+#[derive(Debug)]
+struct UiState {
+    pointer_acted: bool,
+    pointer_pos: Pos2,
+    hovered_item: Option<u64>,
+    scroll_bar_hidden: bool,
+    removed_item_rect: Option<Rect>,
 }
 
 pub struct Ui<'a> {
-    pub egui_ctx: egui::Context,
+    pub egui_ctx: Rc<egui::Context>,
     config: &'a Config,
     fonts: FontDefinitions,
-    prev_active_id: u64,
-    prev_active_idx: usize,
-    item_widget_ids: HashMap<u64, egui::Id>,
-    active_source: Option<ActiveSource>,
-    scroll_area_info: Option<ScrollAreaInfo>,
-    is_initial_run: bool,
-    hides_scroll_bar: bool,
     button_widgets: HashMap<u64, ClipboardButton>,
     fallback: Fallback,
     help_modal: HelpModal,
     color_preview_background_texture: TextureHandle,
     error_message: Option<(String, Instant)>,
+
+    is_initial_run: bool,
+    prev_active_id: u64,
+    prev_active_idx: usize,
+    prev_flow: Option<UiFlow>,
+    reset_scroll_offset_next_run: bool,
+    prev_pass: PrevPass,
+    state: UiState,
 }
 
 impl<'a> Ui<'a> {
@@ -189,16 +211,9 @@ impl<'a> Ui<'a> {
         );
 
         Ok(Ui {
-            egui_ctx,
+            egui_ctx: Rc::new(egui_ctx),
             config,
             fonts,
-            prev_active_id: 0,
-            prev_active_idx: 0,
-            item_widget_ids: HashMap::new(),
-            active_source: None,
-            scroll_area_info: None,
-            is_initial_run: true,
-            hides_scroll_bar: config.scroll_bar_auto_hide,
             button_widgets: HashMap::new(),
             fallback: Fallback {
                 image: fallback_img,
@@ -209,6 +224,29 @@ impl<'a> Ui<'a> {
             help_modal: HelpModal::new(),
             color_preview_background_texture,
             error_message: None,
+
+            is_initial_run: true,
+            prev_active_id: 0,
+            prev_active_idx: 0,
+            prev_flow: None,
+            reset_scroll_offset_next_run: false,
+            prev_pass: PrevPass {
+                scroll_output: ScrollAreaInfo {
+                    id: None,
+                    content_size: 0.0,
+                    inner_rect: Rect::ZERO,
+                    offset: 0.0,
+                    is_scrolling: false,
+                },
+                item_widgets: HashMap::new(),
+            },
+            state: UiState {
+                pointer_acted: false,
+                pointer_pos: Pos2::ZERO,
+                hovered_item: None,
+                scroll_bar_hidden: config.scroll_bar_auto_hide,
+                removed_item_rect: None,
+            },
         })
     }
 
@@ -216,7 +254,7 @@ impl<'a> Ui<'a> {
         info!("recreating egui context");
         let egui_ctx = Self::create_egui_context(self.config);
         egui_ctx.set_fonts(self.fonts.clone());
-        self.egui_ctx = egui_ctx;
+        self.egui_ctx = Rc::new(egui_ctx);
 
         debug!("clearing button widgets");
         self.button_widgets.clear();
@@ -261,6 +299,12 @@ impl<'a> Ui<'a> {
             }
         });
 
+        info!("setting global egui options");
+        egui_ctx.options_mut(|options| {
+            // Keep search input to always be focused in search mode
+            options.input_options.surrender_focus_on = egui::SurrenderFocusOn::Never;
+        });
+
         egui_ctx
     }
 
@@ -288,149 +332,53 @@ impl<'a> Ui<'a> {
     pub fn run(
         &mut self,
         egui_input: RawInput,
-        active_id: &mut u64,
-        selection_items: &OrderedHashMap<u64, SelectionItem>,
+        mode: AppMode,
         flow: UiFlow,
+        selection_items: &OrderedHashMapView<u64, SelectionItem>,
         scroll_actions: &[ScrollAction],
+        active_id: &mut u64,
         pending_keys: &mut Vec<KeyChord>,
-        show_help: bool,
+        search_query: &mut String,
     ) -> Result<(FullOutput, Option<u64>)> {
         trace!("painting ui with flow {flow:?}");
-        let mut run_error = None;
-        let layout = &self.config.layout;
-        let active_idx = selection_items
-            .iter()
-            .position(|(id, _)| *id == *active_id)
-            .unwrap_or(0);
+
+        let egui_ctx = Rc::clone(&self.egui_ctx);
         let original_active_id = *active_id;
+        let active_idx = selection_items.iter().position(|(id, _)| *id == *active_id);
+        let active_item_removed = active_idx.is_none();
+        let prev_active_rect = self.prev_pass.item_widgets.get(active_id).map(|(_, r)| r);
+        let is_search_empty = search_query.is_empty();
 
-        if self.prev_active_id != *active_id || self.prev_active_idx != active_idx {
-            self.active_source = Some(ActiveSource::External);
-        }
+        self.state.removed_item_rect = if active_item_removed {
+            prev_active_rect.cloned()
+        } else {
+            None
+        };
 
-        let items_size = selection_items.len();
-        let items_reduced = items_size < self.item_widget_ids.len();
-        let active_item_removed = !selection_items.contains_key(active_id);
-        let prev_active_rect = self
-            .scroll_area_info
-            .as_ref()
-            .and_then(|info| info.content_rects.get(&self.prev_active_id).cloned());
+        self.process_scroll_actions(active_id, active_idx, selection_items, scroll_actions, flow);
+        self.process_pointer_events(&egui_input.events);
 
-        for action in scroll_actions {
-            let action = if flow == UiFlow::TopToBottom {
-                *action
-            } else {
-                action.flipped()
-            };
-
-            if let Some(scroll_info) = &self.scroll_area_info {
-                let id_from_idx = |idx| *selection_items.get_by_index(idx).unwrap().0;
-                let next_id = match action {
-                    ScrollAction::ItemUp => id_from_idx((active_idx + items_size - 1) % items_size),
-                    ScrollAction::ItemDown => id_from_idx((active_idx + 1) % items_size),
-
-                    ScrollAction::HalfUp if active_idx == 0 => id_from_idx(items_size - 1),
-                    ScrollAction::HalfUp => find_item_at_distance_from(
-                        active_idx,
-                        -scroll_info.rect.height() / 2.0,
-                        selection_items,
-                        &scroll_info.content_rects,
-                    ),
-                    ScrollAction::HalfDown if active_idx == items_size - 1 => id_from_idx(0),
-                    ScrollAction::HalfDown => find_item_at_distance_from(
-                        active_idx,
-                        scroll_info.rect.height() / 2.0,
-                        selection_items,
-                        &scroll_info.content_rects,
-                    ),
-
-                    ScrollAction::PageUp if active_idx == 0 => id_from_idx(items_size - 1),
-                    ScrollAction::PageUp => find_item_at_distance_from(
-                        active_idx,
-                        -scroll_info.rect.height(),
-                        selection_items,
-                        &scroll_info.content_rects,
-                    ),
-                    ScrollAction::PageDown if active_idx == items_size - 1 => id_from_idx(0),
-                    ScrollAction::PageDown => find_item_at_distance_from(
-                        active_idx,
-                        scroll_info.rect.height(),
-                        selection_items,
-                        &scroll_info.content_rects,
-                    ),
-
-                    ScrollAction::ToTop => id_from_idx(0),
-                    ScrollAction::ToBottom => id_from_idx(items_size - 1),
-                };
-
-                *active_id = next_id;
-                self.active_source = Some(ActiveSource::ScrollAction);
-            }
-        }
-
-        for ev in &egui_input.events {
-            if !self.is_initial_run
-                && (matches!(
-                    ev,
-                    egui::Event::PointerMoved(_)
-                        | egui::Event::MouseWheel { .. }
-                        | egui::Event::PointerButton { .. }
-                ))
-            {
-                self.active_source = Some(ActiveSource::Hovering);
-            }
-
-            // With scroll_bar_auto_hide = true, on window shown, the scroll bar may still be
-            // briefly visible, so we hide it before showing the window. This shows the scroll
-            // bar back when the pointer starts to move.
-            if let egui::Event::PointerMoved(pointer_pos) = ev
-                && self.config.scroll_bar_auto_hide
-                && self
-                    .scroll_area_info
-                    .as_ref()
-                    .map(|s| s.rect.contains(*pointer_pos))
-                    .unwrap_or(false)
-            {
-                self.hides_scroll_bar = false;
-            }
-        }
-
-        if flow == UiFlow::BottomToTop && self.is_initial_run {
-            self.egui_ctx.request_discard(
-                "BottomToTop flow displays new items at the top of the list. When resetting \
-                 scroll to the bottom, we need to know the height of newly added items beforehand \
-                 to correctly calculate the required scroll offset.",
-            );
-        } else if items_reduced {
-            self.egui_ctx
-                .request_discard("Recalculate scroll area's content size when the number of items reduced");
-        } else if self.prev_active_idx != active_idx {
-            self.egui_ctx.request_discard(
-                "Recalculate scroll area's content rects when active item got moved",
+        if selection_items.len() != self.prev_pass.item_widgets.len() {
+            egui_ctx.request_discard(
+                "Recalculate various stuffs that are based on content size. \
+                 Fast path of the `request_discard` call in `scroll_area`, \
+                 helps with skipping some calculations that use `will_discard`",
             );
         }
 
+        if let Some(active_idx) = active_idx
+            && active_idx != self.prev_active_idx
+        {
+            egui_ctx.request_discard("Recalculate scroll offset when active item is moved");
+        }
+
+        let mut run_error = None;
         let mut clicked_item = None;
-        let full_output = self.egui_ctx.run_ui(egui_input, |ui| {
+        let full_output = egui_ctx.run_ui(egui_input, |ui| {
             // Pick new active item if the current one got removed
             if !ui.will_discard() && active_item_removed {
-                let nearest_item_id = if let Some(scroll_info) = &self.scroll_area_info
-                    && let Some(removed_rect) = prev_active_rect
-                {
-                    selection_items
-                        .iter()
-                        .filter_map(|(id, _)| {
-                            scroll_info.content_rects.get(id).map(|rect| {
-                                (*id, (rect.center().y - removed_rect.center().y).abs())
-                            })
-                        })
-                        .min_by(|(_, dist1), (_, dist2)| dist1.total_cmp(dist2))
-                        .map(|(id, _)| id)
-                } else {
-                    None
-                };
-
-                *active_id = nearest_item_id
+                *active_id = self
+                    .pick_new_item_from_removed(selection_items)
                     .or_else(|| selection_items.get_by_index(0).map(|(id, _)| *id))
                     .unwrap_or(0);
             }
@@ -439,26 +387,17 @@ impl<'a> Ui<'a> {
             let mut active_id_updated_by_hovering = false;
             if !ui.will_discard()
                 && !self.is_initial_run
-                && self
-                    .active_source
-                    .is_some_and(|source| source == ActiveSource::Hovering)
+                && let Some(hovered_id) = self.get_active_item_from_hovering(ui, *active_id)
             {
-                let hovered_item = ui.viewport(|vp| {
-                    self.item_widget_ids
-                        .iter()
-                        .find(|(_, widget_id)| vp.interact_widgets.hovered.contains(widget_id))
-                });
-                if let Some((&hovered_item_id, _)) = hovered_item {
-                    *active_id = hovered_item_id;
-                    active_id_updated_by_hovering = true;
-                }
+                *active_id = hovered_id;
+                active_id_updated_by_hovering = true;
             }
 
             // Active item is scrolled out of view, pick a new one
             if !ui.will_discard()
                 && !self.is_initial_run
                 && self.prev_active_id == *active_id
-                && self.prev_active_idx == active_idx
+                && active_idx.is_none_or(|ai| self.prev_active_idx == ai)
 
                 // If the pointer is on the top item (A) and the user scrolls up, an item (B)
                 // scrolls in that is only partially visible. Without this check, the code below
@@ -466,200 +405,78 @@ impl<'a> Ui<'a> {
                 // back, causing flickering until B is fully in view.
                 && !active_id_updated_by_hovering
 
-                && let Some(scroll_info) = &self.scroll_area_info
-                && let Some(active_rect) = scroll_info.content_rects.get(active_id)
-                && let scroll_rect = scroll_info
-                    .rect
-                    .shrink2(egui::vec2(0.0, layout.window_padding.y as f32))
-                && !scroll_rect.contains_rect(*active_rect)
+                && let Some(in_view_id) = self.pick_new_item_from_out_of_view(*active_id, flow, selection_items)
             {
-                let active_rect_above_view = active_rect.min.y < scroll_rect.min.y;
-                #[allow(clippy::collapsible_else_if)]
-                let near_idx_offset = if flow == UiFlow::TopToBottom {
-                    if active_rect_above_view { 0 } else { 1 }
-                } else {
-                    if active_rect_above_view { 1 } else { 0 }
-                };
-
-                let found_idx = selection_items.binary_search_by(|(k, _)| {
-                    let rect = scroll_info.content_rects.get(k).unwrap_or(&Rect::ZERO);
-                    let order = if active_rect_above_view {
-                        rect.min.y.total_cmp(&scroll_rect.min.y)
-                    } else {
-                        rect.max.y.total_cmp(&scroll_rect.max.y)
-                    };
-
-                    if flow == UiFlow::TopToBottom {
-                        order
-                    } else {
-                        order.reverse()
-                    }
-                });
-                let found_idx = match found_idx {
-                    Ok(exact_idx) => Some(exact_idx),
-                    Err(near_idx)
-                        if near_idx >= near_idx_offset
-                            && near_idx - near_idx_offset < selection_items.len() =>
-                    {
-                        Some(near_idx - near_idx_offset)
-                    }
-                    Err(_) => None,
-                };
-
-                if let Some(found_idx) = found_idx {
-                    *active_id = *selection_items.get_by_index(found_idx).unwrap().0;
-                }
+                *active_id = in_view_id;
             }
 
-            let scroll_content_size = self
-                .scroll_area_info
-                .as_ref()
-                .map(|s| {
-                    let mut size = 0.0;
-                    for (item_id, _) in selection_items {
-                        size += s
-                            .content_rects
-                            .get(item_id)
-                            .map(|r| r.height())
-                            .unwrap_or(0.0);
-                        size += self.config.layout.button_spacing;
-                    }
-                    size -= self.config.layout.button_spacing;
-                    size += (self.config.layout.window_padding.y as f32) * 2.0;
-                    size
-                })
-                .unwrap_or(0.0);
-            let content_overflowed = self
-                .scroll_area_info
-                .as_ref()
-                .map(|s| s.rect.height() < scroll_content_size)
-                .unwrap_or(false);
+            self.search_panel(ui, mode == AppMode::Search, search_query);
 
-            let next_scroll_offset = if let Some(scroll_area) = &self.scroll_area_info {
-                // FIXME: scrolls to active item on initial run, not scrolling to top
-                let sets_default_scroll_offset = self.is_initial_run
-                    // Force items to be at the bottom of the window
-                    || (flow == UiFlow::BottomToTop && !content_overflowed);
-                let sets_active_scroll_offset = self.prev_active_id != *active_id
-                    || self.prev_active_idx != active_idx
-                    // Momentum scrolling may have moved the active item out of view
-                    || scroll_area
-                        .prev_is_scrolling
-                        .is_some_and(|prev| prev != scroll_area.is_scrolling);
+            let scroll_output = egui::CentralPanel::default()
+                .frame(egui::Frame::new())
+                .show(ui, |ui| {
+                    self.ribbon(ui);
 
-                if sets_default_scroll_offset || sets_active_scroll_offset || items_reduced {
-                    let padding = layout.window_padding.y as f32;
-                    let scroll_rect = scroll_area.rect;
-                    let scroll_offset = scroll_area.offset;
+                    self.scroll_area(ui, flow, *active_id, |sf, ui| -> Result<()> {
+                        sf.prev_pass.item_widgets.clear();
 
-                    if sets_default_scroll_offset {
-                        if flow == UiFlow::TopToBottom {
-                            Some(0.0)
-                        } else {
-                            Some(scroll_content_size - scroll_rect.height())
+                        if selection_items.is_empty() {
+                            let message = if mode == AppMode::Search && !is_search_empty {
+                                "No matching items."
+                            } else {
+                                "Your clipboard history will appear here."
+                            };
+                            ui.centered_and_justified(|ui| ui.add(egui::Label::new(message)));
+                            return Ok(());
                         }
-                    } else
-                    // Force content to be pushed down to fill the removed items' space when at the bottom of the scroll area
-                    if items_reduced
-                        && content_overflowed
-                        && scroll_offset + scroll_rect.height() > scroll_content_size
-                    {
-                        Some(scroll_content_size - scroll_rect.height())
-                    } else
-                    // During momentum scrolling, the pointer can hover over an item near the edge
-                    // of the window and make it active. Avoid scrolling that item into view while
-                    // the list is moving, because that would reset its velocity and stop the scroll.
-                    if !scroll_area.is_scrolling
-                        && let Some(&active_rect) = scroll_area.content_rects.get(active_id)
-                        && let unpadded_scroll_rect = scroll_rect.shrink2(egui::vec2(0.0, padding))
-                        && !unpadded_scroll_rect.contains_rect(active_rect)
-                    {
-                        if active_rect.top() < unpadded_scroll_rect.top() {
-                            Some(scroll_offset + active_rect.top() - padding)
+
+                        let item_it: Box<dyn Iterator<Item = _>> = if flow == UiFlow::BottomToTop {
+                            Box::new(selection_items.iter().enumerate().rev())
                         } else {
-                            Some(
-                                scroll_offset + active_rect.bottom()
-                                    - unpadded_scroll_rect.height()
-                                    - padding,
-                            )
+                            Box::new(selection_items.iter().enumerate())
+                        };
+                        for (i, (&id, item)) in item_it {
+                            let is_active = id == *active_id;
+                            let is_pinned = item.is_pinned();
+
+                            let mut btn_widget = sf
+                                .button_widgets
+                                .get(&item.id())
+                                .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?
+                                .clone()
+                                .is_active(is_active)
+                                .is_pinned(is_pinned);
+                            if sf.config.show_quick_paste_hint && i < 10 {
+                                btn_widget = btn_widget.keyboard_hint(((i + 1) % 10).to_string());
+                            }
+
+                            let btn = ui.push_id(id, |ui| ui.add(btn_widget)).inner;
+                            sf.prev_pass
+                                .item_widgets
+                                .insert(item.id(), (btn.id, btn.rect));
                         }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
 
-            self.item_widget_ids.clear();
+                        Ok(())
+                    })
+                }).inner;
 
-            if next_scroll_offset.is_some()
-                && let Some(scroll_area) = &self.scroll_area_info
-                && let Err(e) = egui::scroll_area::State::reset_velocity(ui, scroll_area.id)
-            {
-                debug!("failed to reset main scroll area velocity: {e}");
+            if let Err(err) = scroll_output {
+                run_error = Some(err);
+                return;
             }
-
-            let mut content_sizes = HashMap::new();
-            let container_result = Self::container(
-                ui,
-                self.config,
-                next_scroll_offset,
-                self.hides_scroll_bar,
-                |ui| {
-                    if selection_items.is_empty() {
-                        ui.centered_and_justified(|ui| {
-                            ui.add(egui::Label::new("Your clipboard history will appear here."))
-                        });
-                        return Ok(());
-                    }
-
-                    let layout_reversed = flow == UiFlow::BottomToTop;
-                    let item_it: Box<dyn Iterator<Item = _>> = if layout_reversed {
-                        Box::new(selection_items.iter().enumerate().rev())
-                    } else {
-                        Box::new(selection_items.iter().enumerate())
-                    };
-
-                    for (i, (&id, item)) in item_it {
-                        let is_active = id == *active_id;
-                        let is_pinned = item.is_pinned();
-
-                        let mut btn_widget = self
-                            .button_widgets
-                            .get(&item.id())
-                            .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?
-                            .clone()
-                            .is_active(is_active)
-                            .is_pinned(is_pinned);
-                        if self.config.show_quick_paste_hint && i < 10 {
-                            btn_widget = btn_widget.keyboard_hint(((i + 1) % 10).to_string());
-                        }
-
-                        let btn = ui.add(btn_widget);
-
-                        self.item_widget_ids.insert(id, btn.id);
-                        content_sizes.insert(item.id(), btn.rect);
-                    }
-
-                    Ok(())
-                },
-            );
 
             clicked_item = ui.viewport(|vp| {
                 vp.interact_widgets.clicked.and_then(|id| {
-                    self.item_widget_ids
+                    self.prev_pass
+                        .item_widgets
                         .iter()
-                        .find(|&(_, &widget_id)| widget_id == id)
+                        .find(|&(_, &(widget_id, _))| widget_id == id)
                         .map(|(&id, _)| id)
                 })
             });
 
-            if show_help {
-                self.help_modal
-                    .show(ui, self.config.layout.window_dimensions.into());
+            if mode == AppMode::Help {
+                self.help_modal.show(ui, self.config.layout.window_dimensions.into());
             } else {
                 self.help_modal.hide();
             }
@@ -668,41 +485,9 @@ impl<'a> Ui<'a> {
                 debug!("active item changed, clearing pending keys");
                 pending_keys.clear();
             }
+            self.pending_keys_overlay(ui, pending_keys);
 
-            if !pending_keys.is_empty() {
-                Self::draw_pending_keys_overlay(ui, pending_keys, self.config);
-            }
-
-            if self
-                .error_message
-                .as_ref()
-                .is_some_and(|(_, shown_at)| shown_at.elapsed() >= ERROR_MESSAGE_TIMEOUT)
-            {
-                self.error_message = None;
-            }
-            if let Some((message, _)) = &self.error_message {
-                Self::draw_error_overlay(ui, message, self.config);
-            }
-
-            match container_result {
-                Ok(scroll_area_output) => {
-                    self.scroll_area_info = Some(ScrollAreaInfo {
-                        id: scroll_area_output.id,
-                        rect: scroll_area_output.inner_rect,
-                        content_rects: content_sizes,
-                        offset: scroll_area_output.state.offset[1],
-                        is_scrolling: self
-                            .scroll_area_info
-                            .as_ref()
-                            .is_some_and(|prev| prev.offset != scroll_area_output.state.offset[1]),
-                        prev_is_scrolling: self
-                            .scroll_area_info
-                            .as_ref()
-                            .map(|prev| prev.is_scrolling),
-                    });
-                }
-                Err(err) => run_error = Some(err),
-            }
+            self.error_overlay(ui);
         });
 
         self.is_initial_run = false;
@@ -711,6 +496,8 @@ impl<'a> Ui<'a> {
             .iter()
             .position(|(id, _)| *id == *active_id)
             .unwrap_or(0);
+        self.prev_flow = Some(flow);
+        self.reset_scroll_offset_next_run = false;
 
         match run_error {
             None => Ok((full_output, clicked_item)),
@@ -718,112 +505,424 @@ impl<'a> Ui<'a> {
         }
     }
 
-    fn container(
+    fn process_scroll_actions(
+        &self,
+        active_id: &mut u64,
+        active_idx: Option<usize>,
+        selection_items: &OrderedHashMapView<u64, SelectionItem>,
+        scroll_actions: &[ScrollAction],
+        flow: UiFlow,
+    ) {
+        if scroll_actions.is_empty() {
+            return;
+        }
+
+        let items_size = selection_items.len();
+        if items_size == 0 {
+            return;
+        }
+
+        let Some(active_idx) = active_idx else {
+            warn!(
+                "selection item {active_id} is missing from displayed item list, ignoring scroll actions: {scroll_actions:?}"
+            );
+            return;
+        };
+
+        let item_rects = &self.prev_pass.item_widgets;
+        let scroll_rect_height = self.prev_pass.scroll_output.inner_rect.height();
+        let id_from_idx = |idx| *selection_items.get_by_index(idx).unwrap().0;
+        for action in scroll_actions {
+            let action = if flow == UiFlow::TopToBottom {
+                *action
+            } else {
+                action.flipped()
+            };
+
+            let next_id = match action {
+                ScrollAction::ItemUp => id_from_idx((active_idx + items_size - 1) % items_size),
+                ScrollAction::ItemDown => id_from_idx((active_idx + 1) % items_size),
+
+                ScrollAction::HalfUp if active_idx == 0 => id_from_idx(items_size - 1),
+                ScrollAction::HalfUp => find_item_at_distance_from(
+                    active_idx,
+                    -scroll_rect_height / 2.0,
+                    selection_items,
+                    item_rects,
+                ),
+                ScrollAction::HalfDown if active_idx == items_size - 1 => id_from_idx(0),
+                ScrollAction::HalfDown => find_item_at_distance_from(
+                    active_idx,
+                    scroll_rect_height / 2.0,
+                    selection_items,
+                    item_rects,
+                ),
+
+                ScrollAction::PageUp if active_idx == 0 => id_from_idx(items_size - 1),
+                ScrollAction::PageUp => find_item_at_distance_from(
+                    active_idx,
+                    -scroll_rect_height,
+                    selection_items,
+                    item_rects,
+                ),
+                ScrollAction::PageDown if active_idx == items_size - 1 => id_from_idx(0),
+                ScrollAction::PageDown => find_item_at_distance_from(
+                    active_idx,
+                    scroll_rect_height,
+                    selection_items,
+                    item_rects,
+                ),
+
+                ScrollAction::ToTop => id_from_idx(0),
+                ScrollAction::ToBottom => id_from_idx(items_size - 1),
+            };
+
+            *active_id = next_id;
+        }
+    }
+
+    fn process_pointer_events(&mut self, events: &[egui::Event]) {
+        self.state.pointer_acted = false;
+        for ev in events {
+            if matches!(
+                ev,
+                egui::Event::PointerMoved(_)
+                    | egui::Event::MouseWheel { .. }
+                    | egui::Event::PointerButton { .. }
+            ) {
+                self.state.pointer_acted = true;
+            }
+
+            if let egui::Event::PointerMoved(pointer_pos) = ev {
+                self.state.pointer_pos = *pointer_pos;
+            }
+        }
+    }
+
+    fn pick_new_item_from_removed(
+        &self,
+        selection_items: &OrderedHashMapView<u64, SelectionItem>,
+    ) -> Option<u64> {
+        if selection_items.is_empty() {
+            return None;
+        }
+
+        if selection_items.len() == 1 {
+            return Some(*selection_items.get_by_index(0).unwrap().0);
+        }
+
+        let removed_rect = self.state.removed_item_rect?;
+        selection_items
+            .iter()
+            .filter_map(|(id, _)| {
+                self.prev_pass
+                    .item_widgets
+                    .get(id)
+                    .map(|(_, rect)| (*id, (rect.center().y - removed_rect.center().y).abs()))
+            })
+            .min_by(|(_, dist1), (_, dist2)| dist1.total_cmp(dist2))
+            .map(|(id, _)| id)
+    }
+
+    fn get_active_item_from_hovering(&mut self, ui: &egui::Ui, active_id: u64) -> Option<u64> {
+        if self.state.hovered_item.is_some_and(|hi| hi == active_id) || self.state.pointer_acted {
+            let hovered_item = ui.viewport(|vp| {
+                self.prev_pass
+                    .item_widgets
+                    .iter()
+                    .find(|(_, (widget_id, _))| vp.interact_widgets.hovered.contains(widget_id))
+            });
+            if let Some((&hovered_item_id, _)) = hovered_item {
+                self.state.hovered_item = Some(hovered_item_id);
+            } else {
+                self.state.hovered_item = None;
+            }
+        } else {
+            self.state.hovered_item = None;
+        }
+
+        self.state.hovered_item
+    }
+
+    fn pick_new_item_from_out_of_view(
+        &self,
+        active_id: u64,
+        flow: UiFlow,
+        selection_items: &OrderedHashMapView<u64, SelectionItem>,
+    ) -> Option<u64> {
+        if let Some((_, active_rect)) = self.prev_pass.item_widgets.get(&active_id)
+            && let scroll_rect = self
+                .prev_pass
+                .scroll_output
+                .inner_rect
+                .shrink2(egui::vec2(0.0, self.config.layout.window_padding.y as f32))
+            && !scroll_rect.contains_rect(*active_rect)
+        {
+            let active_rect_above_view = active_rect.min.y < scroll_rect.min.y;
+            #[allow(clippy::collapsible_else_if)]
+            let near_idx_offset = if flow == UiFlow::TopToBottom {
+                if active_rect_above_view { 0 } else { 1 }
+            } else {
+                if active_rect_above_view { 1 } else { 0 }
+            };
+
+            let found_idx = selection_items.binary_search_by(|(k, _)| {
+                let rect = self
+                    .prev_pass
+                    .item_widgets
+                    .get(k)
+                    .map(|(_, r)| r)
+                    .unwrap_or(&Rect::ZERO);
+                let order = if active_rect_above_view {
+                    rect.min.y.total_cmp(&scroll_rect.min.y)
+                } else {
+                    rect.max.y.total_cmp(&scroll_rect.max.y)
+                };
+
+                if flow == UiFlow::TopToBottom {
+                    order
+                } else {
+                    order.reverse()
+                }
+            });
+            let found_idx = match found_idx {
+                Ok(exact_idx) => Some(exact_idx),
+                Err(near_idx)
+                    if near_idx >= near_idx_offset
+                        && near_idx - near_idx_offset < selection_items.len() =>
+                {
+                    Some(near_idx - near_idx_offset)
+                }
+                Err(_) => None,
+            };
+
+            if let Some(found_idx) = found_idx {
+                return Some(*selection_items.get_by_index(found_idx).unwrap().0);
+            }
+        }
+
+        None
+    }
+
+    fn scroll_area<R>(
+        &mut self,
         ui: &mut egui::Ui,
-        config: &Config,
-        scroll_offset: Option<f32>,
-        hides_scroll_bar: bool,
-        add_contents: impl FnOnce(&mut egui::Ui) -> Result<()>,
-    ) -> Result<ScrollAreaOutput<()>> {
+        flow: UiFlow,
+        active_id: u64,
+        add_contents: impl FnOnce(&mut Self, &mut egui::Ui) -> R,
+    ) -> R {
         let LayoutConfig {
             window_padding: padding,
             scroll_bar_margin,
             ..
-        } = config.layout;
-        let theme = &config.theme;
-        let mut scroll_area_output = None;
-        let mut err: Option<anyhow::Error> = None;
+        } = self.config.layout;
+        let theme = &self.config.theme;
+        let drag_scroll = if self.config.drag_scroll {
+            DragScroll::Always
+        } else {
+            DragScroll::Never
+        };
+        let scroll_bar_rect = egui::Rect::from_min_max(
+            ui.min_rect().min + egui::vec2(0.0, scroll_bar_margin),
+            ui.max_rect().max - egui::vec2(0.0, scroll_bar_margin),
+        );
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new())
-            .show(ui, |ui| {
-                if config.show_ribbon {
-                    Self::draw_ribbon(
-                        ui.painter(),
-                        &ui.min_rect(),
-                        config.layout.ribbon_size,
-                        config.theme.ribbon,
-                    );
-                }
+        let prev_content_size = self.prev_pass.scroll_output.content_size;
+        let prev_scroll_rect = self.prev_pass.scroll_output.inner_rect;
+        let prev_offset = self.prev_pass.scroll_output.offset;
+        let active_prev_rect = self.prev_pass.item_widgets.get(&active_id).map(|(_, r)| r);
+        let prev_flow = self.prev_flow;
+        let is_prev_scrolling = self.prev_pass.scroll_output.is_scrolling;
+        let is_prev_overflow = prev_content_size > prev_scroll_rect.height();
 
-                let scroll_bar_rect = egui::Rect::from_min_max(
-                    ui.min_rect().min + egui::vec2(0.0, scroll_bar_margin),
-                    ui.max_rect().max - egui::vec2(0.0, scroll_bar_margin),
-                );
-
-                let original_style = ui.style().as_ref().clone();
-                let mut scrollbar_style = original_style.clone();
-                scrollbar_style.visuals.extreme_bg_color = theme.scroll_background.into();
-
-                if hides_scroll_bar {
-                    scrollbar_style.spacing.scroll.dormant_background_opacity = 0.0;
-                    scrollbar_style.spacing.scroll.dormant_handle_opacity = 0.0;
-                    scrollbar_style.spacing.scroll.active_background_opacity = 0.0;
-                    scrollbar_style.spacing.scroll.active_handle_opacity = 0.0;
-                } else if !config.scroll_bar_auto_hide {
-                    scrollbar_style.spacing.scroll.dormant_background_opacity =
-                        scrollbar_style.spacing.scroll.active_background_opacity;
-                    scrollbar_style.spacing.scroll.dormant_handle_opacity =
-                        scrollbar_style.spacing.scroll.active_handle_opacity;
-                }
-
-                ui.set_style(scrollbar_style);
-
-                let mut scroll_area = egui::ScrollArea::vertical()
-                    .auto_shrink(false)
-                    .scroll_source(ScrollSource {
-                        drag: if config.drag_scroll {
-                            DragScroll::Always
-                        } else {
-                            DragScroll::Never
-                        },
-                        ..Default::default()
-                    })
-                    .scroll_bar_rect(scroll_bar_rect);
-                if let Some(offset) = scroll_offset {
-                    scroll_area = scroll_area.scroll_offset(egui::vec2(0.0, offset));
-                }
-
-                scroll_area_output = Some(scroll_area.show(ui, |ui| {
-                    ui.set_style(original_style);
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin::symmetric(padding.x, padding.y))
-                        .show(ui, |ui| {
-                            if let Err(e) = add_contents(ui) {
-                                err = Some(e);
-                            }
-                        });
-                }));
-            });
-
-        match err {
-            None => Ok(scroll_area_output.unwrap()),
-            Some(e) => Err(e),
+        // With `scroll_bar_auto_hide` = true, on window shown, the scroll bar may still be
+        // briefly visible, so we hide it before showing the window. This shows the scroll
+        // bar back when the pointer starts to move.
+        if self.config.scroll_bar_auto_hide && prev_scroll_rect.contains(self.state.pointer_pos) {
+            self.state.scroll_bar_hidden = false;
         }
+
+        let original_style = ui.style().as_ref().clone();
+        let mut scrollbar_style = original_style.clone();
+        scrollbar_style.visuals.extreme_bg_color = theme.scroll_background.into();
+        if self.state.scroll_bar_hidden || !is_prev_overflow {
+            scrollbar_style.spacing.scroll.dormant_background_opacity = 0.0;
+            scrollbar_style.spacing.scroll.dormant_handle_opacity = 0.0;
+            scrollbar_style.spacing.scroll.active_background_opacity = 0.0;
+            scrollbar_style.spacing.scroll.active_handle_opacity = 0.0;
+        } else if !self.config.scroll_bar_auto_hide {
+            scrollbar_style.spacing.scroll.dormant_background_opacity =
+                scrollbar_style.spacing.scroll.active_background_opacity;
+            scrollbar_style.spacing.scroll.dormant_handle_opacity =
+                scrollbar_style.spacing.scroll.active_handle_opacity;
+        }
+        ui.set_style(scrollbar_style);
+
+        let mut scroll_area = egui::ScrollArea::vertical()
+            .id_salt("main_scroll_area")
+            .auto_shrink(false)
+            .scroll_source(ScrollSource {
+                drag: drag_scroll,
+                ..Default::default()
+            })
+            .scroll_bar_rect(scroll_bar_rect);
+
+        let mut forced_scroll_offset = None;
+
+        if self.is_initial_run || self.reset_scroll_offset_next_run {
+            if self.is_initial_run {
+                debug!("resetting scroll offset on initial run");
+            } else if self.reset_scroll_offset_next_run {
+                debug!("resetting scroll offset on demand");
+            }
+
+            if flow == UiFlow::TopToBottom {
+                forced_scroll_offset = Some(0.0);
+            }
+            if flow == UiFlow::BottomToTop && is_prev_overflow {
+                forced_scroll_offset = Some(prev_content_size - prev_scroll_rect.height());
+            }
+        }
+
+        // Set correct scroll offset when an item is removed right in the first pass,
+        // so `pick_new_item_from_removed` can pick correct item in the next one
+        let removed_item_height = if ui.will_discard()
+            && let Some(rect) = self.state.removed_item_rect
+        {
+            rect.height() + self.config.layout.button_spacing
+        } else {
+            0.0
+        };
+        // `removed_item_height` can contain excess `button_spacing` if the last item is removed
+        let next_content_size = (prev_content_size - removed_item_height).max(0.0);
+
+        // Force the content to be bottom-aligned when running with BottomToTop flow
+        if flow == UiFlow::BottomToTop && !is_prev_overflow {
+            forced_scroll_offset = Some(next_content_size - prev_scroll_rect.height());
+        }
+
+        // Force content to be pushed down to fill the removed items' space when at the bottom of the scroll area.
+        // This allows picking the correct nearest item for the next active item.
+        let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
+        if removed_item_height > 0.0 && prev_scroll_rect.height() + next_offset > next_content_size
+        {
+            debug!("updating scroll offset after item removed");
+            forced_scroll_offset = Some(next_content_size - prev_scroll_rect.height());
+        }
+
+        // Scroll active item into view if it's goes out of view.
+        // During momentum scrolling, the pointer can hover over an item near the edge
+        // of the window and make it active. Avoid scrolling that item into view while
+        // the list is moving, because that would reset its velocity and stop the scroll.
+        let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
+        let active_next_rect = active_prev_rect
+            .map(|r| {
+                if prev_flow == Some(flow.flipped()) {
+                    let axis = -prev_offset + prev_content_size / 2.0;
+                    r.translate(egui::vec2(0.0, -axis))
+                        .flipped_y()
+                        .translate(egui::vec2(0.0, axis))
+                } else {
+                    *r
+                }
+            })
+            .map(|r| r.translate(egui::vec2(0.0, prev_offset - next_offset)));
+        if !is_prev_scrolling
+            && let Some(active_rect) = active_next_rect
+            && let unpadded_scroll_rect =
+                prev_scroll_rect.shrink2(egui::vec2(0.0, padding.y as f32))
+            && !unpadded_scroll_rect.contains_rect(active_rect)
+        {
+            debug!("scrolling active item into view");
+            if active_rect.top() < unpadded_scroll_rect.top() {
+                forced_scroll_offset = Some(active_rect.top() + next_offset - padding.y as f32);
+            } else {
+                forced_scroll_offset = Some(
+                    active_rect.bottom() + next_offset
+                        - unpadded_scroll_rect.height()
+                        - padding.y as f32,
+                );
+            }
+        }
+
+        if let Some(offset) = forced_scroll_offset {
+            scroll_area = scroll_area.vertical_scroll_offset(offset);
+
+            if let Some(prev_scroll_id) = self.prev_pass.scroll_output.id
+                && let Err(err) = egui::scroll_area::State::reset_velocity(ui, prev_scroll_id)
+            {
+                debug!("failed to reset main scroll area velocity: {err}");
+            }
+        }
+
+        let output = scroll_area.show_viewport(ui, |ui, vp| {
+            ui.set_style(original_style);
+
+            // output.state.offset[1] is the next intended offset, not the currently painted offset
+            let current_offset = vp.min.y;
+
+            (
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(padding.x, padding.y))
+                    .show(ui, |ui| add_contents(self, ui))
+                    .inner,
+                current_offset,
+            )
+        });
+        let (response, current_offset) = output.inner;
+
+        if output.content_size.y != prev_content_size {
+            ui.request_discard("Recalculate various stuffs that are based on content size");
+        }
+
+        let rounded_offset = current_offset
+            .round_to_pixels(ui.pixels_per_point())
+            .round_ui();
+        let is_scrolling = self.prev_pass.scroll_output.offset != rounded_offset;
+        self.prev_pass.scroll_output = ScrollAreaInfo {
+            id: Some(output.id),
+            content_size: output.content_size.y,
+            inner_rect: output.inner_rect,
+            offset: rounded_offset,
+            is_scrolling,
+        };
+
+        response
     }
 
-    fn draw_ribbon(painter: &Painter, container_rect: &Rect, size: f32, color: impl Into<Color32>) {
+    fn ribbon(&self, ui: &egui::Ui) {
+        if !self.config.show_ribbon {
+            return;
+        }
+
+        let size = self.config.layout.ribbon_size;
+        let color = self.config.theme.ribbon;
+
         let mut points = [
             egui::pos2(-size, 0.0),
             egui::pos2(0.0, 0.0),
             egui::pos2(0.0, size),
         ];
         for p in &mut points {
-            p.x += container_rect.width();
+            p.x += ui.min_rect().width();
         }
 
-        painter.add(epaint::Shape::convex_polygon(
+        ui.painter().add(epaint::Shape::convex_polygon(
             points.to_vec(),
             color,
             Stroke::NONE,
         ));
     }
 
-    fn draw_pending_keys_overlay(ctx: &egui::Context, pending_keys: &[KeyChord], config: &Config) {
-        let fg_color: Color32 = config.theme.pending_keys_foreground.into();
-        let bg_color: Color32 = config.theme.pending_keys_background.into();
-        let padding: Vec2 = config.layout.pending_keys_padding.into();
-        let margin: Vec2 = config.layout.pending_keys_margin.into();
+    fn pending_keys_overlay(&self, ui: &egui::Ui, pending_keys: &[KeyChord]) {
+        if pending_keys.is_empty() {
+            return;
+        }
+
+        let fg_color: Color32 = self.config.theme.pending_keys_foreground.into();
+        let bg_color: Color32 = self.config.theme.pending_keys_background.into();
+        let padding: Vec2 = self.config.layout.pending_keys_padding.into();
+        let margin: Vec2 = self.config.layout.pending_keys_margin.into();
 
         let label = pending_keys
             .iter()
@@ -831,15 +930,15 @@ impl<'a> Ui<'a> {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let rect = ctx.input(|i| i.content_rect());
-        let painter = ctx.layer_painter(LayerId::new(
+        let rect = ui.input(|i| i.content_rect());
+        let painter = ui.layer_painter(LayerId::new(
             Order::Foreground,
             Id::new("pending_keys_overlay"),
         ));
 
         let galley = painter.layout(
             label,
-            FontId::proportional(config.font.overlay_text_size),
+            FontId::proportional(self.config.font.overlay_text_size),
             fg_color,
             rect.width() - margin.x * 2.0 - padding.x * 2.0,
         );
@@ -847,7 +946,11 @@ impl<'a> Ui<'a> {
         let galley_pos = rect.right_bottom() - margin - padding - galley.size();
         let bg_rect = Rect::from_min_size(galley_pos - padding, galley.size() + padding * 2.0);
 
-        painter.rect_filled(bg_rect, config.layout.pending_keys_corner_radius, bg_color);
+        painter.rect_filled(
+            bg_rect,
+            self.config.layout.pending_keys_corner_radius,
+            bg_color,
+        );
         painter.galley(galley_pos, galley, fg_color);
     }
 
@@ -855,18 +958,30 @@ impl<'a> Ui<'a> {
         self.error_message = Some((message.into(), Instant::now()));
     }
 
-    fn draw_error_overlay(ctx: &egui::Context, message: &str, config: &Config) {
-        let fg_color: Color32 = config.theme.error_foreground.into();
-        let bg_color: Color32 = config.theme.error_background.into();
-        let padding: Vec2 = config.layout.pending_keys_padding.into();
-        let margin: Vec2 = config.layout.pending_keys_margin.into();
+    fn error_overlay(&mut self, ui: &egui::Ui) {
+        if self
+            .error_message
+            .as_ref()
+            .is_some_and(|(_, shown_at)| shown_at.elapsed() >= ERROR_MESSAGE_TIMEOUT)
+        {
+            self.error_message = None;
+        }
 
-        let rect = ctx.input(|i| i.content_rect());
-        let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("error_overlay")));
+        let Some((message, _)) = &self.error_message else {
+            return;
+        };
+
+        let fg_color: Color32 = self.config.theme.error_foreground.into();
+        let bg_color: Color32 = self.config.theme.error_background.into();
+        let padding: Vec2 = self.config.layout.pending_keys_padding.into();
+        let margin: Vec2 = self.config.layout.pending_keys_margin.into();
+
+        let rect = ui.input(|i| i.content_rect());
+        let painter = ui.layer_painter(LayerId::new(Order::Foreground, Id::new("error_overlay")));
 
         let galley = painter.layout(
             message.to_owned(),
-            FontId::proportional(config.font.overlay_text_size),
+            FontId::proportional(self.config.font.overlay_text_size),
             fg_color,
             rect.width() - margin.x * 2.0 - padding.x * 2.0,
         );
@@ -877,17 +992,60 @@ impl<'a> Ui<'a> {
         );
         let bg_rect = Rect::from_min_size(galley_pos - padding, galley.size() + padding * 2.0);
 
-        painter.rect_filled(bg_rect, config.layout.pending_keys_corner_radius, bg_color);
+        painter.rect_filled(
+            bg_rect,
+            self.config.layout.pending_keys_corner_radius,
+            bg_color,
+        );
         painter.galley(galley_pos, galley, fg_color);
+    }
+
+    fn search_panel(&self, ui: &mut egui::Ui, display_search: bool, query: &mut String) {
+        let layout = &self.config.layout;
+        let padding_x = layout.window_padding.x
+            + layout
+                .button_padding
+                .x
+                .clamp(i8::MIN as f32, i8::MAX as f32) as i8;
+        let padding_y = layout.window_padding.y;
+
+        let input_id = Id::new("search_input");
+        if display_search && !ui.memory(|m| m.has_focus(input_id)) {
+            ui.memory_mut(|m| m.request_focus(input_id));
+        }
+
+        egui::Panel::bottom("search_panel")
+            .resizable(false)
+            .drag_to_open(false)
+            .frame(egui::Frame::new())
+            .show_collapsible(ui, &mut display_search.clone(), |ui| {
+                egui::TextEdit::singleline(query)
+                    .id(input_id)
+                    .frame(
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin::symmetric(padding_x, padding_y)),
+                    )
+                    .desired_width(f32::INFINITY)
+                    .show(ui);
+            });
     }
 
     pub fn reset(&mut self) {
         info!("resetting ui states");
-        self.active_source = None;
         self.is_initial_run = true;
-        self.hides_scroll_bar = self.config.scroll_bar_auto_hide;
         self.help_modal.hide();
         self.error_message = None;
+        self.state = UiState {
+            pointer_acted: false,
+            pointer_pos: Pos2::ZERO,
+            hovered_item: None,
+            scroll_bar_hidden: self.config.scroll_bar_auto_hide,
+            removed_item_rect: None,
+        };
+    }
+
+    pub fn reset_scroll_offset(&mut self) {
+        self.reset_scroll_offset_next_run = true;
     }
 
     pub fn build_button_widget(&mut self, item: &SelectionItem) -> Result<()> {
@@ -1040,10 +1198,11 @@ impl<'a> Ui<'a> {
 fn find_item_at_distance_from(
     from_idx: usize,
     distance: f32,
-    items: &OrderedHashMap<u64, SelectionItem>,
-    item_rects: &HashMap<u64, Rect>,
+    items: &OrderedHashMapView<u64, SelectionItem>,
+    item_widgets: &HashMap<u64, (egui::Id, Rect)>,
 ) -> u64 {
     let items_size = items.len();
+    let id_from_idx = |idx| *items.get_by_index(idx).unwrap().0;
     assert!(items_size > 0);
     assert!(from_idx < items_size);
 
@@ -1056,24 +1215,24 @@ fn find_item_at_distance_from(
     let target_dist = distance.abs();
     let (start, end, dir) = if distance >= 0.0 {
         if from_idx == items_size - 1 {
-            return *items.get_by_index(from_idx).unwrap().0;
+            return id_from_idx(from_idx);
         }
-        (from_idx + 1, items.len() - 1, Dir::Down)
+        (from_idx + 1, items_size - 1, Dir::Down)
     } else {
         if from_idx == 0 {
-            return *items.get_by_index(from_idx).unwrap().0;
+            return id_from_idx(from_idx);
         }
         (from_idx - 1, 0, Dir::Up)
     };
 
     let mut to_idx = start;
     let mut total_dist = 0.0;
-    let mut current_pos = item_rects
-        .get(items.get_by_index(from_idx).unwrap().0)
-        .map(|r| r.center().y)
+    let mut current_pos = item_widgets
+        .get(&id_from_idx(from_idx))
+        .map(|(_, r)| r.center().y)
         .unwrap_or(0.0);
     loop {
-        if let Some(rect) = item_rects.get(items.get_by_index(to_idx).unwrap().0) {
+        if let Some((_, rect)) = item_widgets.get(&id_from_idx(to_idx)) {
             let prev_pos = current_pos;
             current_pos = rect.center().y;
 
@@ -1104,7 +1263,7 @@ fn find_item_at_distance_from(
         };
     }
 
-    *items.get_by_index(to_idx).unwrap().0
+    id_from_idx(to_idx)
 }
 
 fn create_files_thumbnail(

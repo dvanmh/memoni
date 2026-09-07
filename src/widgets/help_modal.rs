@@ -90,7 +90,7 @@ impl HelpModal {
                                 Separator::default().spacing(8.0).shrink(48.0).ui(ui);
                             }
                             ui.label(
-                                RichText::new(format!("{} Mode", group.name))
+                                RichText::new(group.name)
                                     .size(TextStyle::Heading.resolve(ui.style()).size * 0.9),
                             );
                         });

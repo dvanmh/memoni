@@ -9,8 +9,8 @@ pub struct OrderedHashMap<K, V>
 where
     K: Eq + Hash + Clone,
 {
-    map: HashMap<K, V>,
-    keys: VecDeque<K>,
+    pub map: HashMap<K, V>,
+    pub keys: VecDeque<K>,
 }
 
 impl<K, V> OrderedHashMap<K, V>
@@ -120,6 +120,14 @@ where
         self.keys.clear();
     }
 
+    pub fn to_view(&self) -> OrderedHashMapView<'_, K, V> {
+        let (front, back) = self.keys.as_slices();
+        OrderedHashMapView {
+            map: &self.map,
+            keys: SliceView::Two(front, back),
+        }
+    }
+
     pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             map: &self.map,
@@ -136,14 +144,6 @@ where
             idx: 0,
             back_idx: 0,
         }
-    }
-
-    pub fn binary_search_by<'a, F>(&'a self, mut f: F) -> Result<usize, usize>
-    where
-        F: FnMut((&'a K, &'a V)) -> Ordering,
-    {
-        self.keys
-            .binary_search_by(|k| f((k, self.map.get(k).unwrap())))
     }
 }
 
@@ -234,8 +234,6 @@ where
     }
 }
 
-// -----
-
 impl<'a, K, V> IntoIterator for &'a OrderedHashMap<K, V>
 where
     K: Eq + Hash + Clone,
@@ -247,8 +245,6 @@ where
         self.iter()
     }
 }
-
-// -----
 
 impl<K, V> IntoIterator for OrderedHashMap<K, V>
 where
@@ -276,5 +272,175 @@ where
     type Item = (K, V);
     fn next(&mut self) -> Option<Self::Item> {
         self.ordered_map.pop_front()
+    }
+}
+
+// -----
+
+#[derive(Debug)]
+enum SliceView<'a, T> {
+    One(&'a [T]),
+    Two(&'a [T], &'a [T]),
+}
+
+impl<'a, T> SliceView<'a, T> {
+    fn len(&self) -> usize {
+        match self {
+            SliceView::One(s) => s.len(),
+            SliceView::Two(a, b) => a.len() + b.len(),
+        }
+    }
+
+    fn get(&self, i: usize) -> Option<&'a T> {
+        match self {
+            SliceView::One(s) => s.get(i),
+            SliceView::Two(a, b) => {
+                if i < a.len() {
+                    a.get(i)
+                } else {
+                    b.get(i - a.len())
+                }
+            }
+        }
+    }
+
+    fn binary_search_by<F>(&self, mut f: F) -> Result<usize, usize>
+    where
+        F: FnMut(&'a T) -> std::cmp::Ordering,
+    {
+        match self {
+            SliceView::One(s) => s.binary_search_by(f),
+            SliceView::Two(a, b) => {
+                let search_b = match a.last() {
+                    None => true, // a is empty, must search b
+                    Some(last) => f(last) == std::cmp::Ordering::Less,
+                };
+
+                if search_b {
+                    b.binary_search_by(f)
+                        .map(|i| i + a.len())
+                        .map_err(|i| i + a.len())
+                } else {
+                    a.binary_search_by(f)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct OrderedHashMapView<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    map: &'a HashMap<K, V>,
+    keys: SliceView<'a, K>,
+}
+
+impl<'a, K, V> OrderedHashMapView<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    pub fn new(map: &'a HashMap<K, V>, keys: &'a [K]) -> Self {
+        Self {
+            map,
+            keys: SliceView::One(keys),
+        }
+    }
+
+    pub fn get_by_index(&self, index: usize) -> Option<(&K, &V)> {
+        self.keys.get(index).and_then(|k| self.map.get_key_value(k))
+    }
+
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.len() == 0
+    }
+
+    pub fn iter(&self) -> ViewIter<'_, K, V> {
+        ViewIter {
+            map: self.map,
+            keys: &self.keys,
+            idx: 0,
+            back_idx: 0,
+        }
+    }
+
+    pub fn binary_search_by<F>(&self, mut f: F) -> Result<usize, usize>
+    where
+        F: FnMut((&'a K, &'a V)) -> Ordering,
+    {
+        self.keys
+            .binary_search_by(|k| f((k, self.map.get(k).unwrap())))
+    }
+}
+
+pub struct ViewIter<'a, K, V> {
+    map: &'a HashMap<K, V>,
+    keys: &'a SliceView<'a, K>,
+    idx: usize,
+    back_idx: usize,
+}
+
+impl<'a, K, V> Iterator for ViewIter<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    type Item = (&'a K, &'a V);
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.idx < self.keys.len() - self.back_idx {
+            let key = self.keys.get(self.idx).unwrap();
+            self.idx += 1;
+            if let Some(val) = self.map.get(key) {
+                return Some((key, val));
+            }
+
+            // If key was removed from map but still in keys vec, skip it
+        }
+
+        None
+    }
+}
+
+impl<'a, K, V> DoubleEndedIterator for ViewIter<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        while self.back_idx < self.keys.len() - self.idx {
+            let key = self.keys.get(self.keys.len() - self.back_idx - 1).unwrap();
+            self.back_idx += 1;
+            if let Some(val) = self.map.get(key) {
+                return Some((key, val));
+            }
+
+            // If key was removed from map but still in keys vec, skip it
+        }
+
+        None
+    }
+}
+
+impl<'a, K, V> ExactSizeIterator for ViewIter<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    fn len(&self) -> usize {
+        self.map.len() - self.idx - self.back_idx
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a OrderedHashMapView<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = ViewIter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
