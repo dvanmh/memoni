@@ -2,11 +2,8 @@ use anyhow::{Result, anyhow, bail};
 use egui::Modifiers;
 use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
-use memoni::config::Config;
 use memoni::input::Input;
-use memoni::keymap_action::{
-    KeyAction, KeymapAction, PasteModifier, PointerAction, SimpleScrollAction,
-};
+use memoni::keymap_spec::{KeyAction, PasteModifier, PointerAction, SimpleScrollAction};
 use memoni::persistence::Persistence;
 use memoni::search::Search;
 use memoni::selection::Selection;
@@ -15,6 +12,7 @@ use memoni::ui::{Ui, UiFlow};
 use memoni::x11_key_converter::X11KeyConverter;
 use memoni::x11_window::X11Window;
 use memoni::{AppMode, ordered_hash_map::OrderedHashMapView};
+use memoni::{config::Config, keymap_action::KeymapAction};
 use memoni::{opengl_context::OpenGLContext, selection::SelectionType};
 use mio::unix::SourceFd;
 use signal_hook::consts::TERM_SIGNALS;

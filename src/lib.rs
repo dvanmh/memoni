@@ -4,6 +4,7 @@ pub mod ext;
 pub mod freedesktop_cache;
 pub mod input;
 pub mod keymap_action;
+pub mod keymap_spec;
 pub mod opengl_context;
 pub mod ordered_hash_map;
 pub mod persistence;

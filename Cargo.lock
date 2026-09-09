@@ -1381,6 +1381,7 @@ dependencies = [
  "gethostname",
  "glutin",
  "image",
+ "itertools",
  "lexopt",
  "libloading 0.9.0",
  "log",

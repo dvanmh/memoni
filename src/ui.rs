@@ -31,7 +31,7 @@ use crate::{
     config::{Config, Dimensions, LayoutConfig, ThemeConfig},
     ext::RectExt as _,
     freedesktop_cache::get_cached_thumbnail,
-    keymap_action::{KeyChord, ScrollAction},
+    keymap_spec::{KeyChord, ScrollAction},
     ordered_hash_map::OrderedHashMapView,
     selection_item::{self, ActedOnUris, MozUrl, SelectionItem},
     utils::is_image_mime,

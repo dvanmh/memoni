@@ -4,7 +4,7 @@ use egui::{
 };
 use log::debug;
 
-use crate::{ScrollAreaStateExt, keymap_action::ACTION_KEYMAPS};
+use crate::{ScrollAreaStateExt, keymap_spec::KEYMAP_SPECS};
 
 pub struct HelpModal {
     scroll_area_id: Option<egui::Id>,
@@ -82,40 +82,30 @@ impl HelpModal {
 
                     let gap = 12.0;
                     let width = ui.available_width() - gap;
-                    let key_block_padding = egui::vec2(8.0, 4.0);
+                    let key_frames = KeyFrames {
+                        padding: egui::vec2(8.0, 4.0),
+                        gap: 4.0,
+                        max_width: width * 0.35,
+                    };
 
-                    for (i, group) in ACTION_KEYMAPS.iter().enumerate() {
+                    for (i, spec) in KEYMAP_SPECS.iter().enumerate() {
                         ui.vertical_centered(|ui| {
                             if i > 0 {
                                 Separator::default().spacing(8.0).shrink(48.0).ui(ui);
                             }
                             ui.label(
-                                RichText::new(group.name)
+                                RichText::new(format!("{} Mode", spec.name))
                                     .size(TextStyle::Heading.resolve(ui.style()).size * 0.9),
                             );
                         });
 
-                        for entry in &group.entries {
-                            let key_str = entry
-                                .keys
-                                .iter()
-                                .map(|k| k.to_string())
-                                .collect::<Vec<_>>()
-                                .join(" ");
-
+                        for entry in spec.entries {
                             ui.horizontal(|ui| {
                                 let key_block = ui.vertical(|ui| {
                                     ui.allocate_ui_with_layout(
                                         egui::vec2(width * 0.35, 0.0),
-                                        Layout::top_down(Align::RIGHT),
-                                        |ui| {
-                                            Frame::NONE
-                                                .fill(ui.visuals().code_bg_color)
-                                                .corner_radius(4.0)
-                                                .inner_margin(key_block_padding)
-                                                // TODO: use monospace font
-                                                .show(ui, |ui| ui.label(key_str))
-                                        },
+                                        Layout::top_down(Align::LEFT),
+                                        |ui| key_frames.show(ui, entry.bindings),
                                     )
                                 });
                                 let key_height = key_block.response.rect.height();
@@ -157,5 +147,60 @@ impl HelpModal {
 impl Default for HelpModal {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct KeyFrames {
+    padding: Vec2,
+    gap: f32,
+    max_width: f32,
+}
+
+impl KeyFrames {
+    fn show(self, ui: &mut egui::Ui, bindings: &[&str]) {
+        let font_id = TextStyle::Body.resolve(ui.style());
+        let color = ui.visuals().text_color();
+
+        let widths = bindings
+            .iter()
+            .map(|binding| {
+                ui.painter()
+                    .layout_no_wrap(binding.to_string(), font_id.clone(), color)
+                    .rect
+                    .width()
+                + self.padding.x * 2.0
+            })
+            .collect::<Vec<_>>();
+
+        let mut lines = vec![];
+        let mut start = 0;
+        let mut line_width = 0.0;
+
+        for (i, width) in widths.iter().enumerate() {
+            let advance = width + if i == start { 0.0 } else { self.gap };
+            if i > start && line_width + advance > self.max_width {
+                lines.push(start..i);
+                start = i;
+                line_width = *width;
+            } else {
+                line_width += advance;
+            }
+        }
+        lines.push(start..bindings.len());
+
+        for line in lines {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = self.gap;
+                for binding in &bindings[line] {
+                    Frame::NONE
+                        .fill(ui.visuals().code_bg_color)
+                        .corner_radius(4.0)
+                        .inner_margin(self.padding)
+                        // TODO: use monospace font
+                        .show(ui, |ui| ui.label(*binding));
+                }
+            });
+        }
     }
 }

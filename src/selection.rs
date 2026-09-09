@@ -32,7 +32,7 @@ use xkeysym::Keysym;
 
 use crate::{
     config::{Config, KeyStroke, Modifier},
-    keymap_action::PasteModifier,
+    keymap_spec::PasteModifier,
     ordered_hash_map::OrderedHashMap,
     selection_item::{SelectionData, SelectionItem},
     transfer_window_pool::{TransferWindow, TransferWindowPool},
