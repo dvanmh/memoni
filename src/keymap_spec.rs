@@ -146,12 +146,12 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
             // Other actions
             KeymapEntry::new(
                 &["d d", "Delete"],
-                "Remove item",
+                "Remove active item",
                 plain!(Action::Key(KeyAction::Remove)),
             ),
             KeymapEntry::new(
                 &["p"],
-                "Toggle pin",
+                "Toggle pin on active item",
                 plain!(Action::Key(KeyAction::Pin)),
             ),
             KeymapEntry::new(
@@ -323,6 +323,16 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
             ),
 
             // Other actions
+            KeymapEntry::new(
+                &["M-d"],
+                "Remove active item",
+                plain!(Action::Key(KeyAction::Remove)),
+            ),
+            KeymapEntry::new(
+                &["M-p"],
+                "Toggle pin on active item",
+                plain!(Action::Key(KeyAction::Pin)),
+            ),
             KeymapEntry::new(
                 &["Esc"],
                 "Exit search",
