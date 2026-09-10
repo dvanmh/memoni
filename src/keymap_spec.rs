@@ -317,7 +317,7 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Passthrough),
             ),
             KeymapEntry::new(
-                &["C-y"],
+                &["C-S-z"],
                 "Redo",
                 plain!(Action::Passthrough),
             ),
@@ -483,8 +483,7 @@ impl KeyChord {
             None => Box::new(iter::once(KeyOrPointerButton::parse(key))),
         };
 
-        keys
-            .map(|key| key.map(|key| KeyChord { key, mods }))
+        keys.map(|key| key.map(|key| KeyChord { key, mods }))
             .collect::<Result<Vec<_>>>()
             .with_context(|| format!("invalid key in {chord_str:?}"))
     }

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, mem};
 
 use anyhow::Result;
-use egui::{Event, Key, RawInput};
+use egui::{Event, Key, Modifiers, RawInput};
 use log::{debug, trace};
 
 use crate::keymap_spec::{
@@ -56,7 +56,7 @@ impl KeymapAction {
                     if pressed
                         && !(mode == AppMode::Search
                             && is_char_key(key)
-                            && (modifiers.is_none() || modifiers.shift_only()))
+                            && (modifiers.is_none() || modifiers == Modifiers::SHIFT))
                     {
                         Some((
                             KeyChord {
