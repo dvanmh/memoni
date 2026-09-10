@@ -283,7 +283,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
             let mut will_show_window = false;
             let mut will_hide_window = false;
             let mut paste_item_id = None;
-            let mut paste_modifier = PasteModifier::default();
+            let mut paste_modifier = PasteModifier::NONE;
             let mut quick_paste_index = None;
 
             // non-blocking when window is visible or first-loop pre-rendering, blocking otherwise
@@ -482,7 +482,10 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                             persistence
                                 .save_selection_data(&selection.items, &selection.metadata)?;
                         }
-                        KeyAction::QuickPaste(index) => quick_paste_index = Some(index),
+                        KeyAction::QuickPaste(index, modifier) => {
+                            quick_paste_index = Some(index);
+                            paste_modifier = modifier;
+                        },
 
                         KeyAction::ShowHelp => {
                             info!("switching to Help mode");

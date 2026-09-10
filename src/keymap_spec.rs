@@ -125,7 +125,22 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
             KeymapEntry::new(
                 &["1…9", "0"],
                 "Quick paste item 1-10",
-                |index, _| Action::Key(KeyAction::QuickPaste(index)),
+                |index, _| Action::Key(KeyAction::QuickPaste(index, PasteModifier::NONE)),
+            ),
+            KeymapEntry::new(
+                &["C-1…9", "C-0"],
+                "Quick paste item 1-10 and press Enter",
+                |index, _| Action::Key(KeyAction::QuickPaste(index, PasteModifier::AND_ENTER)),
+            ),
+            KeymapEntry::new(
+                &["S-1…9", "S-0"],
+                "Quick paste trimmed item 1-10",
+                |index, _| Action::Key(KeyAction::QuickPaste(index, PasteModifier::TRIM)),
+            ),
+            KeymapEntry::new(
+                &["C-S-1…9", "C-S-0"],
+                "Quick paste trimmed item 1-10 and press Enter",
+                |index, _| Action::Key(KeyAction::QuickPaste(index, PasteModifier::TRIM_AND_ENTER)),
             ),
 
             // Other actions
@@ -197,7 +212,22 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
             KeymapEntry::new(
                 &["M-1…9", "M-0"],
                 "Quick paste item 1-10",
-                |index, _| Action::Key(KeyAction::QuickPaste(index)),
+                |index, _| Action::Key(KeyAction::QuickPaste(index, PasteModifier::NONE)),
+            ),
+            KeymapEntry::new(
+                &["C-M-1…9", "C-M-0"],
+                "Quick paste item 1-10 and press Enter",
+                |index, _| Action::Key(KeyAction::QuickPaste(index, PasteModifier::AND_ENTER)),
+            ),
+            KeymapEntry::new(
+                &["S-M-1…9", "S-M-0"],
+                "Quick paste trimmed item 1-10",
+                |index, _| Action::Key(KeyAction::QuickPaste(index, PasteModifier::TRIM)),
+            ),
+            KeymapEntry::new(
+                &["C-S-M-1…9", "C-S-M-0"],
+                "Quick paste trimmed item 1-10 and press Enter",
+                |index, _| Action::Key(KeyAction::QuickPaste(index, PasteModifier::TRIM_AND_ENTER)),
             ),
 
             // Prompt editing
@@ -609,7 +639,7 @@ pub enum Action {
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum KeyAction {
     Paste(PasteModifier),
-    QuickPaste(usize),
+    QuickPaste(usize, PasteModifier),
     Scroll(ScrollAction),
     Remove,
     Pin,
