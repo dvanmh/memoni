@@ -297,6 +297,9 @@ impl<'a> Ui<'a> {
                     *font_id = egui::FontId::proportional(font.size);
                 }
             }
+
+            style.visuals.text_cursor.stroke.color = theme.search_caret.into();
+            style.visuals.selection.bg_fill = theme.search_selection.into();
         });
 
         info!("setting global egui options");

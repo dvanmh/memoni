@@ -288,6 +288,16 @@ error_background = "#800000a0"
 # default: "#cccccc"
 pin_color = "#ffffff"
 
+# Search input caret (cursor) color
+#
+# default: "#c0deff"
+search_caret = "#ffffff"
+
+# Search input text selection highlight color
+#
+# default: "#005c80"
+search_selection = "#446688aa"
+
 
 # Selection-specific overrides
 # Any field can be overridden under [CLIPBOARD] or [PRIMARY]

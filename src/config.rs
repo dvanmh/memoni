@@ -198,6 +198,10 @@ pub struct ThemeConfig {
     pub error_background: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub pin_color: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub search_caret: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub search_selection: Color,
 }
 
 impl Default for ThemeConfig {
@@ -217,6 +221,8 @@ impl Default for ThemeConfig {
             error_foreground: Color(0xfff87171),
             error_background: Color(0xdd450a0a),
             pin_color: Color(0xffcccccc),
+            search_caret: Color(0xffc0deff),
+            search_selection: Color(0xff005c80),
         }
     }
 }
