@@ -187,6 +187,16 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 "Move to next item",
                 plain!(Action::Key(KeyAction::Scroll(ScrollAction::ItemDown))),
             ),
+            KeymapEntry::new(
+                &["M-v"],
+                "Scroll half page up",
+                plain!(Action::Key(KeyAction::Scroll(ScrollAction::HalfUp))),
+            ),
+            KeymapEntry::new(
+                &["C-v"],
+                "Scroll half page down",
+                plain!(Action::Key(KeyAction::Scroll(ScrollAction::HalfDown))),
+            ),
 
             // Pasting
             KeymapEntry::new(
@@ -232,24 +242,24 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
 
             // Prompt editing
             KeymapEntry::new(
-                &["←"],
+                &["←", "C-b"],
                 "Move caret one character left",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::ArrowLeft, Modifiers::NONE)),
             ),
             KeymapEntry::new(
-                &["→"],
+                &["→", "C-f"],
                 "Move caret one character right",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::ArrowRight, Modifiers::NONE)),
             ),
             KeymapEntry::new(
-                &["C-←"],
+                &["C-←", "M-b"],
                 "Move caret one word left",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::ArrowLeft, Modifiers::CTRL)),
             ),
             KeymapEntry::new(
-                &["C-→"],
+                &["C-→", "M-f"],
                 "Move caret one word right",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::ArrowRight, Modifiers::CTRL)),
             ),
             KeymapEntry::new(
                 &["S-←"],
@@ -272,14 +282,14 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Passthrough),
             ),
             KeymapEntry::new(
-                &["Home"],
+                &["Home", "C-a"],
                 "Move caret to start of line",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::Home, Modifiers::NONE)),
             ),
             KeymapEntry::new(
-                &["End"],
+                &["End", "C-e"],
                 "Move caret to end of line",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::End, Modifiers::NONE)),
             ),
             KeymapEntry::new(
                 &["S-Home"],
@@ -292,14 +302,14 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Passthrough),
             ),
             KeymapEntry::new(
-                &["Backspace"],
+                &["Backspace", "C-h"],
                 "Delete character left",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::Backspace, Modifiers::NONE)),
             ),
             KeymapEntry::new(
-                &["Delete"],
+                &["Delete", "C-d"],
                 "Delete character right",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::Delete, Modifiers::NONE)),
             ),
             KeymapEntry::new(
                 &["C-Backspace"],
@@ -307,9 +317,14 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Passthrough),
             ),
             KeymapEntry::new(
-                &["C-Delete"],
+                &["C-Delete", "M-d"],
                 "Delete word right",
-                plain!(Action::Passthrough),
+                plain!(Action::Emit(Key::Delete, Modifiers::CTRL)),
+            ),
+            KeymapEntry::new(
+                &["C-x h"],
+                "Select all",
+                plain!(Action::Emit(Key::A, Modifiers::CTRL)),
             ),
             KeymapEntry::new(
                 &["C-z"],
@@ -324,7 +339,7 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
 
             // Other actions
             KeymapEntry::new(
-                &["M-d"],
+                &["M-k"],
                 "Remove active item",
                 plain!(Action::Key(KeyAction::Remove)),
             ),
@@ -334,7 +349,7 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Key(KeyAction::Pin)),
             ),
             KeymapEntry::new(
-                &["Esc"],
+                &["Esc", "C-g"],
                 "Exit search",
                 plain!(Action::Key(KeyAction::Close)),
             ),
@@ -642,6 +657,7 @@ impl PasteModifier {
 pub enum Action {
     Key(KeyAction),
     Pointer(PointerAction),
+    Emit(Key, Modifiers),
     Passthrough,
 }
 

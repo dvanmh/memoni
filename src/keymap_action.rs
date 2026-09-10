@@ -122,6 +122,15 @@ impl KeymapAction {
                         match action {
                             Action::Key(key_action) => key_actions.push(key_action),
                             Action::Pointer(pointer_action) => pointer_actions.push(pointer_action),
+                            Action::Emit(key, modifiers) => {
+                                egui_input.events.push(Event::Key {
+                                    key,
+                                    pressed: true,
+                                    repeat: false,
+                                    modifiers,
+                                    physical_key: None,
+                                });
+                            }
                             Action::Passthrough => egui_input.events.push(event),
                         }
                         self.pending_keys.clear();
