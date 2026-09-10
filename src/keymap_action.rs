@@ -45,6 +45,7 @@ impl KeymapAction {
             None => return (key_actions, pointer_actions),
         };
 
+        let has_no_pending_keys = self.pending_keys.is_empty();
         for event in mem::take(&mut egui_input.events) {
             let key_chord = match event {
                 event @ Event::Key {
@@ -55,6 +56,7 @@ impl KeymapAction {
                 } => {
                     if pressed
                         && !(mode == AppMode::Search
+                            && has_no_pending_keys
                             && is_char_key(key)
                             && (modifiers.is_none() || modifiers == Modifiers::SHIFT))
                     {
@@ -91,7 +93,7 @@ impl KeymapAction {
                     }
                 }
                 event @ Event::Text(_) => {
-                    if mode == AppMode::Search {
+                    if mode == AppMode::Search && has_no_pending_keys {
                         trace!("text event provided to egui: {event:?}");
                         egui_input.events.push(event);
                     }
@@ -122,15 +124,13 @@ impl KeymapAction {
                         match action {
                             Action::Key(key_action) => key_actions.push(key_action),
                             Action::Pointer(pointer_action) => pointer_actions.push(pointer_action),
-                            Action::Emit(key, modifiers) => {
-                                egui_input.events.push(Event::Key {
-                                    key,
-                                    pressed: true,
-                                    repeat: false,
-                                    modifiers,
-                                    physical_key: None,
-                                });
-                            }
+                            Action::Emit(key, modifiers) => egui_input.events.push(Event::Key {
+                                key,
+                                pressed: true,
+                                repeat: false,
+                                modifiers,
+                                physical_key: None,
+                            }),
                             Action::Passthrough => egui_input.events.push(event),
                         }
                         self.pending_keys.clear();
