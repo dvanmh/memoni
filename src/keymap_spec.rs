@@ -281,6 +281,16 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 "Delete word right",
                 plain!(Action::Passthrough),
             ),
+            KeymapEntry::new(
+                &["C-z"],
+                "Undo",
+                plain!(Action::Passthrough),
+            ),
+            KeymapEntry::new(
+                &["C-y"],
+                "Redo",
+                plain!(Action::Passthrough),
+            ),
 
             // Other actions
             KeymapEntry::new(

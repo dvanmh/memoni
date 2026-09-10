@@ -135,6 +135,18 @@ impl KeymapAction {
             }
         }
 
+        // egui expects command to mirror ctrl on non-mac platforms
+        for event in egui_input.events.iter_mut() {
+            let modifiers = match event {
+                Event::Key { modifiers, .. } => modifiers,
+                Event::PointerButton { modifiers, .. } => modifiers,
+                Event::MouseWheel { modifiers, .. } => modifiers,
+                Event::ModifiersChanged(modifiers) => modifiers,
+                _ => continue,
+            };
+            modifiers.command = modifiers.ctrl;
+        }
+
         (key_actions, pointer_actions)
     }
 }
