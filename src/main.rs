@@ -232,7 +232,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     let mut keymap_action = KeymapAction::new()?;
     let mut search = Search::new();
 
-    let mut persistence = Persistence::new(args.selection, &display_id)?;
+    let persistence = Persistence::new(args.selection, &display_id)?;
     let mut selection = Selection::new(
         persistence.load_selection_data()?,
         &window,
@@ -485,7 +485,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                         KeyAction::QuickPaste(index, modifier) => {
                             quick_paste_index = Some(index);
                             paste_modifier = modifier;
-                        },
+                        }
 
                         KeyAction::ShowHelp => {
                             info!("switching to Help mode");

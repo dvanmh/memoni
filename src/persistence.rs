@@ -5,11 +5,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write as _},
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Condvar, Mutex},
     thread,
 };
 
@@ -22,15 +18,14 @@ use crate::{
 const BINCODE_CONFIG: bincode::config::Configuration = bincode::config::standard();
 const BINARY_VERSION: u32 = 2;
 
-struct SaveRequest {
-    serialized_data: Vec<u8>,
-    cancel_token: Arc<AtomicBool>,
+struct SharedState {
+    pending: Mutex<Option<Vec<u8>>>,
+    condvar: Condvar,
 }
 
 pub struct Persistence {
     file_path: PathBuf,
-    sender: mpsc::Sender<SaveRequest>,
-    current_cancel_token: Option<Arc<AtomicBool>>,
+    shared: Arc<SharedState>,
 }
 
 impl Persistence {
@@ -52,47 +47,45 @@ impl Persistence {
         let file_path = xdg_data_home.join(file_name);
         let temp_file_path = file_path.with_extension("tmp");
 
-        let (sender, receiver) = mpsc::channel::<SaveRequest>();
+        let shared = Arc::new(SharedState {
+            pending: Mutex::new(None),
+            condvar: Condvar::new(),
+        });
+        let shared_clone = shared.clone();
         let file_path_clone = file_path.clone();
         thread::spawn(move || {
-            while let Ok(request) = receiver.recv() {
-                if let Err(e) = write_to_disk(
-                    &file_path_clone,
-                    &temp_file_path,
-                    &request.serialized_data,
-                    &request.cancel_token,
-                ) {
+            loop {
+                let data = {
+                    let mut p = shared_clone.pending.lock().unwrap();
+                    while p.is_none() {
+                        p = shared_clone.condvar.wait(p).unwrap();
+                    }
+                    p.take()
+                };
+                if let Some(serialized_data) = data
+                    && let Err(e) =
+                        write_to_disk(&file_path_clone, &temp_file_path, &serialized_data)
+                {
                     error!("failed to save selection items in background: {e}");
                 }
             }
         });
 
-        Ok(Persistence {
-            file_path,
-            sender,
-            current_cancel_token: None,
-        })
+        Ok(Persistence { file_path, shared })
     }
 
     pub fn save_selection_data(
-        &mut self,
+        &self,
         items: &OrderedHashMap<u64, SelectionItem>,
         metadata: &SelectionMetadata,
     ) -> Result<()> {
         info!("saving selection items to {:?}", self.file_path);
 
-        if let Some(token) = &self.current_cancel_token {
-            token.store(true, Ordering::Relaxed);
-        }
-
-        let cancel_token = Arc::new(AtomicBool::new(false));
-        self.current_cancel_token = Some(cancel_token.clone());
-
         let serialized_data = bincode::encode_to_vec((items, metadata), BINCODE_CONFIG)?;
-        self.sender.send(SaveRequest {
-            serialized_data,
-            cancel_token,
-        })?;
+        let mut p = self.shared.pending.lock().unwrap();
+        *p = Some(serialized_data);
+        drop(p);
+        self.shared.condvar.notify_one();
 
         Ok(())
     }
@@ -164,35 +157,17 @@ fn write_to_disk(
     file_path: &PathBuf,
     temp_file_path: &PathBuf,
     serialized_data: &[u8],
-    cancel_token: &Arc<AtomicBool>,
 ) -> Result<()> {
     const CHUNK_SIZE: usize = 64 * 1024;
 
-    if cancel_token.load(Ordering::Relaxed) {
-        debug!("saving selection items in background cancelled before doing anything");
-        return Ok(());
-    }
     let mut f = File::create(temp_file_path)?;
     f.write_all(&BINARY_VERSION.to_le_bytes())?;
 
-    for (i, chunk) in serialized_data.chunks(CHUNK_SIZE).enumerate() {
-        if cancel_token.load(Ordering::Relaxed) {
-            debug!("saving selection items in background cancelled before writing chunk {i}");
-            return Ok(());
-        }
+    for chunk in serialized_data.chunks(CHUNK_SIZE) {
         f.write_all(chunk)?;
     }
 
-    if cancel_token.load(Ordering::Relaxed) {
-        debug!("saving selection items in background cancelled before syncing to file");
-        return Ok(());
-    }
     f.sync_all()?;
-
-    if cancel_token.load(Ordering::Relaxed) {
-        debug!("saving selection items in background cancelled before moving temp file to file");
-        return Ok(());
-    }
     fs::rename(temp_file_path, file_path)?;
 
     debug!("saving selection items in background completed");
