@@ -429,7 +429,7 @@ where
     K: Eq + Hash + Clone,
 {
     fn len(&self) -> usize {
-        self.map.len() - self.idx - self.back_idx
+        self.keys.len() - self.idx - self.back_idx
     }
 }
 
