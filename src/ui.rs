@@ -1018,7 +1018,8 @@ impl<'a> Ui<'a> {
         }
 
         let global_animation_time = ui.global_style().animation_time;
-        ui.global_style_mut(|s| s.animation_time = 0.15);
+        // Close panel opened in last window showing immediately
+        ui.global_style_mut(|s| s.animation_time = if self.is_initial_run { 0.0 } else { 0.15 });
 
         egui::Panel::bottom("search_panel")
             .resizable(false)
