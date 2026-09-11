@@ -1017,11 +1017,16 @@ impl<'a> Ui<'a> {
             ui.memory_mut(|m| m.request_focus(input_id));
         }
 
+        let global_animation_time = ui.global_style().animation_time;
+        ui.global_style_mut(|s| s.animation_time = 0.15);
+
         egui::Panel::bottom("search_panel")
             .resizable(false)
             .drag_to_open(false)
             .frame(egui::Frame::new())
             .show_collapsible(ui, &mut display_search.clone(), |ui| {
+                ui.global_style_mut(|s| s.animation_time = global_animation_time);
+
                 egui::TextEdit::singleline(query)
                     .id(input_id)
                     .frame(
