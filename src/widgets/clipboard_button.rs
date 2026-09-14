@@ -6,7 +6,7 @@ use egui::{
     text::LayoutJob,
 };
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct ClipboardButton {
     labels: Vec<Vec<RichText>>,
     sublabel: Option<WidgetText>,
@@ -14,13 +14,10 @@ pub struct ClipboardButton {
     preview: Option<(TextureHandle, Vec2)>,
     preview_source: Option<String>,
     preview_background: Color32,
-    is_active: bool,
     with_preview_padding: Option<Vec2>,
     underline_offset: f32,
-    is_pinned: bool,
     pin_size: f32,
     pin_color: Color32,
-    keyboard_hint: Option<String>,
     color_preview: Option<Color32>,
     color_preview_size: f32,
     color_preview_corner_radius: u8,
@@ -71,12 +68,6 @@ impl ClipboardButton {
     }
 
     #[inline]
-    pub fn is_active(mut self, is_active: bool) -> Self {
-        self.is_active = is_active;
-        self
-    }
-
-    #[inline]
     pub fn with_preview_padding(mut self, with_preview_padding: impl Into<Vec2>) -> Self {
         self.with_preview_padding = Some(with_preview_padding.into());
         self
@@ -89,12 +80,6 @@ impl ClipboardButton {
     }
 
     #[inline]
-    pub fn is_pinned(mut self, is_pinned: bool) -> Self {
-        self.is_pinned = is_pinned;
-        self
-    }
-
-    #[inline]
     pub fn pin_size(mut self, pin_size: f32) -> Self {
         self.pin_size = pin_size;
         self
@@ -103,12 +88,6 @@ impl ClipboardButton {
     #[inline]
     pub fn pin_color(mut self, pin_color: impl Into<Color32>) -> Self {
         self.pin_color = pin_color.into();
-        self
-    }
-
-    #[inline]
-    pub fn keyboard_hint(mut self, keyboard_hint: impl Into<String>) -> Self {
-        self.keyboard_hint = Some(keyboard_hint.into());
         self
     }
 
@@ -135,17 +114,62 @@ impl ClipboardButton {
         self.color_preview_background = Some(color_preview_background);
         self
     }
+
+    #[inline]
+    pub fn with_state(&self, state: ClipboardButtonState) -> ClipboardButtonView<'_> {
+        ClipboardButtonView {
+            button: self,
+            state,
+        }
+    }
 }
 
-impl Widget for ClipboardButton {
+#[derive(Default)]
+pub struct ClipboardButtonState {
+    is_active: bool,
+    is_pinned: bool,
+    keyboard_hint: Option<&'static str>,
+}
+
+impl ClipboardButtonState {
+    #[inline]
+    pub fn is_active(mut self, is_active: bool) -> Self {
+        self.is_active = is_active;
+        self
+    }
+
+    #[inline]
+    pub fn is_pinned(mut self, is_pinned: bool) -> Self {
+        self.is_pinned = is_pinned;
+        self
+    }
+
+    #[inline]
+    pub fn keyboard_hint(mut self, keyboard_hint: &'static str) -> Self {
+        self.keyboard_hint = Some(keyboard_hint);
+        self
+    }
+}
+
+pub struct ClipboardButtonView<'a> {
+    button: &'a ClipboardButton,
+    state: ClipboardButtonState,
+}
+
+impl Widget for ClipboardButtonView<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
+        let Self { button, state } = self;
+        let is_active = state.is_active;
+        let is_pinned = state.is_pinned;
+        let keyboard_hint = state.keyboard_hint;
+
         // TODO: make these configurable?
         let sublabel_gap = 3.0;
         let keyboard_hint_gap = 10.0;
         let keyboard_hint_size = 11.0;
 
-        let padding = if self.preview.is_some()
-            && let Some(with_preview_padding) = self.with_preview_padding
+        let padding = if button.preview.is_some()
+            && let Some(with_preview_padding) = button.with_preview_padding
         {
             with_preview_padding
         } else {
@@ -156,18 +180,18 @@ impl Widget for ClipboardButton {
         let desired_width = ui.available_width();
 
         let mut text_width = desired_width - padding.x - right_padding;
-        if let Some((_, img_size)) = self.preview {
+        if let Some((_, img_size)) = button.preview {
             text_width -= img_size.x;
         }
-        if self.color_preview.is_some() {
-            text_width -= self.color_preview_size + padding.x;
+        if button.color_preview.is_some() {
+            text_width -= button.color_preview_size + padding.x;
         }
 
-        let keyboard_hint_galley = self.keyboard_hint.map(|sh| {
+        let keyboard_hint_galley = keyboard_hint.map(|sh| {
             WidgetText::RichText(Arc::new(
                 RichText::new(sh)
                     .size(keyboard_hint_size)
-                    .color(self.secondary_foreground.unwrap_or(Color32::PLACEHOLDER)),
+                    .color(button.secondary_foreground.unwrap_or(Color32::PLACEHOLDER)),
             ))
             .into_galley(
                 ui,
@@ -181,9 +205,9 @@ impl Widget for ClipboardButton {
             .map(|g| g.size().x + keyboard_hint_gap)
             .unwrap_or(0.0);
 
-        let galleys = self
+        let galleys = button
             .labels
-            .into_iter()
+            .iter()
             .map(|l| {
                 rich_texts_to_galley(
                     l,
@@ -194,8 +218,8 @@ impl Widget for ClipboardButton {
                 )
             })
             .collect::<Vec<_>>();
-        let sublabel_galley = self.sublabel.map(|sl| {
-            sl.color(self.secondary_foreground.unwrap_or(Color32::PLACEHOLDER))
+        let sublabel_galley = button.sublabel.clone().map(|sl| {
+            sl.color(button.secondary_foreground.unwrap_or(Color32::PLACEHOLDER))
                 .into_galley(
                     ui,
                     Some(TextWrapMode::Truncate),
@@ -203,8 +227,8 @@ impl Widget for ClipboardButton {
                     TextStyle::Button,
                 )
         });
-        let img_src_galley = if self.preview.is_some() {
-            self.preview_source.as_ref().map(|s| {
+        let img_src_galley = if button.preview.is_some() {
+            button.preview_source.as_ref().map(|s| {
                 Into::<WidgetText>::into(s).into_galley(
                     ui,
                     Some(TextWrapMode::Truncate),
@@ -222,11 +246,11 @@ impl Widget for ClipboardButton {
                 .map(|g| g.size().y + sublabel_gap)
                 .unwrap_or(0.0)
             + img_src_galley.as_ref().map(|g| g.size().y).unwrap_or(0.0);
-        let preview_height = self.preview.as_ref().map(|i| i.1.y).unwrap_or(0.0);
-        let color_preview_height = self
+        let preview_height = button.preview.as_ref().map(|i| i.1.y).unwrap_or(0.0);
+        let color_preview_height = button
             .color_preview
             .as_ref()
-            .map(|_| self.color_preview_size + padding.y * 2.0)
+            .map(|_| button.color_preview_size + padding.y * 2.0)
             .unwrap_or(0.0);
         let desired_height = preview_height
             .max(color_preview_height)
@@ -237,7 +261,7 @@ impl Widget for ClipboardButton {
 
         if ui.is_rect_visible(rect) {
             let visuals = &ui.style().visuals.widgets.inactive;
-            let bg_fill = if self.is_active {
+            let bg_fill = if is_active {
                 ui.style().visuals.widgets.active.weak_bg_fill
             } else {
                 visuals.weak_bg_fill
@@ -252,12 +276,12 @@ impl Widget for ClipboardButton {
             );
 
             let mut cursor_x = rect.min.x;
-            if let Some((ref texture, size)) = self.preview {
+            if let Some((ref texture, size)) = button.preview {
                 let preview_rect =
                     Rect::from_min_size(rect.min, egui::vec2(size.x, desired_height));
                 let preview = Image::from_texture(texture)
                     .maintain_aspect_ratio(true)
-                    .bg_fill(self.preview_background)
+                    .bg_fill(button.preview_background)
                     .corner_radius(CornerRadius {
                         nw: visuals.corner_radius.nw,
                         sw: visuals.corner_radius.sw,
@@ -270,30 +294,30 @@ impl Widget for ClipboardButton {
                 cursor_x += preview_rect.width();
             }
 
-            if let Some(color_preview) = self.color_preview {
+            if let Some(color_preview) = button.color_preview {
                 cursor_x += padding.x;
 
                 let preview_rect = Rect::from_center_size(
-                    egui::pos2(cursor_x + self.color_preview_size / 2.0, rect.center().y),
-                    Vec2::splat(self.color_preview_size),
+                    egui::pos2(cursor_x + button.color_preview_size / 2.0, rect.center().y),
+                    Vec2::splat(button.color_preview_size),
                 );
 
-                if let Some(background_texture) = self.color_preview_background {
-                    let preview_background = Image::from_texture(&background_texture)
+                if let Some(background_texture) = &button.color_preview_background {
+                    let preview_background = Image::from_texture(background_texture)
                         .maintain_aspect_ratio(true)
-                        .corner_radius(CornerRadius::same(self.color_preview_corner_radius));
+                        .corner_radius(CornerRadius::same(button.color_preview_corner_radius));
                     preview_background.paint_at(ui, preview_rect);
                 }
 
                 ui.painter().rect_filled(
                     preview_rect,
-                    CornerRadius::same(self.color_preview_corner_radius),
+                    CornerRadius::same(button.color_preview_corner_radius),
                     color_preview,
                 );
 
                 ui.painter().rect_stroke(
                     preview_rect,
-                    CornerRadius::same(self.color_preview_corner_radius),
+                    CornerRadius::same(button.color_preview_corner_radius),
                     Stroke::new(1.2_f32, visuals.fg_stroke.color),
                     StrokeKind::Outside,
                 );
@@ -318,7 +342,7 @@ impl Widget for ClipboardButton {
 
                 // Drawing text underline manually with offset to workaround https://github.com/emilk/egui/issues/5855
                 let underline_y =
-                    text_pos.y + galley.size().y - text_underline.width + self.underline_offset;
+                    text_pos.y + galley.size().y - text_underline.width + button.underline_offset;
                 ui.painter().line_segment(
                     [
                         Pos2::new(text_pos.x, underline_y),
@@ -335,7 +359,7 @@ impl Widget for ClipboardButton {
                 ui.painter().galley(
                     text_pos,
                     galley,
-                    self.secondary_foreground.unwrap_or(visuals.text_color()),
+                    button.secondary_foreground.unwrap_or(visuals.text_color()),
                 );
             }
 
@@ -345,14 +369,14 @@ impl Widget for ClipboardButton {
                 ui.painter().galley(
                     text_pos,
                     galley,
-                    self.secondary_foreground.unwrap_or(visuals.text_color()),
+                    button.secondary_foreground.unwrap_or(visuals.text_color()),
                 );
             }
 
-            if self.is_pinned {
-                let pin_center = rect.min + Vec2::splat(self.pin_size / 2.0);
+            if is_pinned {
+                let pin_center = rect.min + Vec2::splat(button.pin_size / 2.0);
                 ui.painter()
-                    .circle_filled(pin_center, self.pin_size, self.pin_color);
+                    .circle_filled(pin_center, button.pin_size, button.pin_color);
             }
         }
 
@@ -361,7 +385,7 @@ impl Widget for ClipboardButton {
 }
 
 fn rich_texts_to_galley(
-    rich_texts: Vec<RichText>,
+    rich_texts: &[RichText],
     ui: &Ui,
     wrap_mode: Option<TextWrapMode>,
     available_width: f32,
@@ -373,7 +397,8 @@ fn rich_texts_to_galley(
 
     let mut layout_job = LayoutJob::default();
     for text in rich_texts {
-        text.append_to(&mut layout_job, style, fallback_font.clone(), valign);
+        text.clone()
+            .append_to(&mut layout_job, style, fallback_font.clone(), valign);
     }
 
     WidgetText::from(layout_job).into_galley(ui, wrap_mode, available_width, fallback_font)

@@ -35,7 +35,10 @@ use crate::{
     ordered_hash_map::OrderedHashMapView,
     selection_item::{self, ActedOnUris, MozUrl, SelectionItem},
     utils::is_image_mime,
-    widgets::{clipboard_button::ClipboardButton, help_modal::HelpModal},
+    widgets::{
+        clipboard_button::{ClipboardButton, ClipboardButtonState},
+        help_modal::HelpModal,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +64,8 @@ struct ImageInfo {
 }
 
 const ERROR_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
+
+const HINTS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
 
 const FALLBACK_IMG_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -444,16 +449,18 @@ impl<'a> Ui<'a> {
                             let is_active = id == *active_id;
                             let is_pinned = item.is_pinned();
 
-                            let mut btn_widget = sf
-                                .button_widgets
-                                .get(&item.id())
-                                .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?
-                                .clone()
+                            let mut state = ClipboardButtonState::default()
                                 .is_active(is_active)
                                 .is_pinned(is_pinned);
                             if sf.config.show_quick_paste_hint && i < 10 {
-                                btn_widget = btn_widget.keyboard_hint(((i + 1) % 10).to_string());
+                                state = state.keyboard_hint(HINTS[i]);
                             }
+
+                            let btn_widget = sf
+                                .button_widgets
+                                .get(&item.id())
+                                .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?
+                                .with_state(state);
 
                             let btn = ui.push_id(id, |ui| ui.add(btn_widget)).inner;
                             sf.prev_pass
