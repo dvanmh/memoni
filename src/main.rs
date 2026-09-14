@@ -524,8 +524,10 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                             }
                             AppMode::Search => {
                                 info!("exiting search mode");
-                                active_id = selection.get_first_unpinned_item();
-                                ui.reset_scroll_offset();
+                                if !search.query.is_empty() {
+                                    active_id = selection.get_first_unpinned_item();
+                                    ui.reset_scroll_offset();
+                                }
                                 mode = AppMode::Normal;
                             }
                             AppMode::Help => {
