@@ -300,6 +300,8 @@ impl<'a> Ui<'a> {
 
             style.visuals.text_cursor.stroke.color = theme.search_caret.into();
             style.visuals.selection.bg_fill = theme.search_selection.into();
+
+            style.animation_time = 0.15;
         });
 
         info!("setting global egui options");
@@ -479,7 +481,7 @@ impl<'a> Ui<'a> {
             });
 
             if mode == AppMode::Help {
-                self.help_modal.show(ui, self.config.layout.window_dimensions.into());
+                self.help_modal.show(ui);
             } else {
                 self.help_modal.hide();
             }
