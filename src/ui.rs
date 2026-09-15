@@ -387,6 +387,8 @@ impl<'a> Ui<'a> {
         let mut run_error = None;
         let mut clicked_item = None;
         let full_output = egui_ctx.run_ui(egui_input, |ui| {
+            let scroll_offset = self.base_forced_scroll_offset(ui, flow);
+
             // Pick new active item if the current one got removed
             if !ui.will_discard() && active_item_removed {
                 *active_id = self
@@ -417,7 +419,8 @@ impl<'a> Ui<'a> {
                 // back, causing flickering until B is fully in view.
                 && !active_id_updated_by_hovering
 
-                && let Some(in_view_id) = self.pick_new_item_from_out_of_view(*active_id, flow, selection_items)
+                && let Some(in_view_id) =
+                    self.pick_new_item_from_out_of_view(*active_id, flow, selection_items, scroll_offset)
             {
                 *active_id = in_view_id;
             }
@@ -429,7 +432,7 @@ impl<'a> Ui<'a> {
                 .show(ui, |ui| {
                     self.ribbon(ui);
 
-                    self.scroll_area(ui, flow, *active_id, |sf, ui| -> Result<()> {
+                    self.scroll_area(ui, flow, *active_id, scroll_offset, |sf, ui| -> Result<()> {
                         sf.prev_pass.item_widgets.clear();
 
                         if selection_items.is_empty() {
@@ -663,14 +666,17 @@ impl<'a> Ui<'a> {
         active_id: u64,
         flow: UiFlow,
         selection_items: &OrderedHashMapView<u64, SelectionItem>,
+        forced_scroll_offset: Option<f32>,
     ) -> Option<u64> {
-        if let Some((_, active_rect)) = self.prev_pass.item_widgets.get(&active_id)
+        let next_offset = forced_scroll_offset.unwrap_or(self.prev_pass.scroll_output.offset);
+        if let Some((_, rect)) = self.prev_pass.item_widgets.get(&active_id)
+            && let active_rect = self.next_item_rect(*rect, flow, next_offset)
             && let scroll_rect = self
                 .prev_pass
                 .scroll_output
                 .inner_rect
                 .shrink2(egui::vec2(0.0, self.config.layout.window_padding.y as f32))
-            && !scroll_rect.contains_rect(*active_rect)
+            && !scroll_rect.contains_rect(active_rect)
         {
             let active_rect_above_view = active_rect.min.y < scroll_rect.min.y;
             #[allow(clippy::collapsible_else_if)]
@@ -685,8 +691,8 @@ impl<'a> Ui<'a> {
                     .prev_pass
                     .item_widgets
                     .get(k)
-                    .map(|(_, r)| r)
-                    .unwrap_or(&Rect::ZERO);
+                    .map(|(_, r)| self.next_item_rect(*r, flow, next_offset))
+                    .unwrap_or(Rect::ZERO);
                 let order = if active_rect_above_view {
                     rect.min.y.total_cmp(&scroll_rect.min.y)
                 } else {
@@ -718,68 +724,11 @@ impl<'a> Ui<'a> {
         None
     }
 
-    fn scroll_area<R>(
-        &mut self,
-        ui: &mut egui::Ui,
-        flow: UiFlow,
-        active_id: u64,
-        add_contents: impl FnOnce(&mut Self, &mut egui::Ui) -> R,
-    ) -> R {
-        let LayoutConfig {
-            window_padding: padding,
-            scroll_bar_margin,
-            ..
-        } = self.config.layout;
-        let theme = &self.config.theme;
-        let drag_scroll = if self.config.drag_scroll {
-            DragScroll::Always
-        } else {
-            DragScroll::Never
-        };
-        let scroll_bar_rect = egui::Rect::from_min_max(
-            ui.min_rect().min + egui::vec2(0.0, scroll_bar_margin),
-            ui.max_rect().max - egui::vec2(0.0, scroll_bar_margin),
-        );
-
+    fn base_forced_scroll_offset(&self, ui: &egui::Ui, flow: UiFlow) -> Option<f32> {
         let prev_content_size = self.prev_pass.scroll_output.content_size;
         let prev_scroll_rect = self.prev_pass.scroll_output.inner_rect;
         let prev_offset = self.prev_pass.scroll_output.offset;
-        let active_prev_rect = self.prev_pass.item_widgets.get(&active_id).map(|(_, r)| r);
-        let prev_flow = self.prev_flow;
-        let is_prev_scrolling = self.prev_pass.scroll_output.is_scrolling;
         let is_prev_overflow = prev_content_size > prev_scroll_rect.height();
-
-        // With `scroll_bar_auto_hide` = true, on window shown, the scroll bar may still be
-        // briefly visible, so we hide it before showing the window. This shows the scroll
-        // bar back when the pointer starts to move.
-        if self.config.scroll_bar_auto_hide && prev_scroll_rect.contains(self.state.pointer_pos) {
-            self.state.scroll_bar_hidden = false;
-        }
-
-        let original_style = ui.style().as_ref().clone();
-        let mut scrollbar_style = original_style.clone();
-        scrollbar_style.visuals.extreme_bg_color = theme.scroll_background.into();
-        if self.state.scroll_bar_hidden || !is_prev_overflow {
-            scrollbar_style.spacing.scroll.dormant_background_opacity = 0.0;
-            scrollbar_style.spacing.scroll.dormant_handle_opacity = 0.0;
-            scrollbar_style.spacing.scroll.active_background_opacity = 0.0;
-            scrollbar_style.spacing.scroll.active_handle_opacity = 0.0;
-        } else if !self.config.scroll_bar_auto_hide {
-            scrollbar_style.spacing.scroll.dormant_background_opacity =
-                scrollbar_style.spacing.scroll.active_background_opacity;
-            scrollbar_style.spacing.scroll.dormant_handle_opacity =
-                scrollbar_style.spacing.scroll.active_handle_opacity;
-        }
-        ui.set_style(scrollbar_style);
-
-        let mut scroll_area = egui::ScrollArea::vertical()
-            .id_salt("main_scroll_area")
-            .auto_shrink(false)
-            .scroll_source(ScrollSource {
-                drag: drag_scroll,
-                ..Default::default()
-            })
-            .scroll_bar_rect(scroll_bar_rect);
 
         let mut forced_scroll_offset = None;
 
@@ -824,23 +773,81 @@ impl<'a> Ui<'a> {
             forced_scroll_offset = Some(next_content_size - prev_scroll_rect.height());
         }
 
+        forced_scroll_offset
+    }
+
+    fn scroll_area<R>(
+        &mut self,
+        ui: &mut egui::Ui,
+        flow: UiFlow,
+        active_id: u64,
+        forced_scroll_offset: Option<f32>,
+        add_contents: impl FnOnce(&mut Self, &mut egui::Ui) -> R,
+    ) -> R {
+        let LayoutConfig {
+            window_padding: padding,
+            scroll_bar_margin,
+            ..
+        } = self.config.layout;
+        let theme = &self.config.theme;
+        let drag_scroll = if self.config.drag_scroll {
+            DragScroll::Always
+        } else {
+            DragScroll::Never
+        };
+        let scroll_bar_rect = egui::Rect::from_min_max(
+            ui.min_rect().min + egui::vec2(0.0, scroll_bar_margin),
+            ui.max_rect().max - egui::vec2(0.0, scroll_bar_margin),
+        );
+
+        let prev_content_size = self.prev_pass.scroll_output.content_size;
+        let prev_scroll_rect = self.prev_pass.scroll_output.inner_rect;
+        let prev_offset = self.prev_pass.scroll_output.offset;
+        let active_prev_rect = self.prev_pass.item_widgets.get(&active_id).map(|(_, r)| r);
+        let is_prev_scrolling = self.prev_pass.scroll_output.is_scrolling;
+        let is_prev_overflow = prev_content_size > prev_scroll_rect.height();
+
+        // With `scroll_bar_auto_hide` = true, on window shown, the scroll bar may still be
+        // briefly visible, so we hide it before showing the window. This shows the scroll
+        // bar back when the pointer starts to move.
+        if self.config.scroll_bar_auto_hide && prev_scroll_rect.contains(self.state.pointer_pos) {
+            self.state.scroll_bar_hidden = false;
+        }
+
+        let original_style = ui.style().as_ref().clone();
+        let mut scrollbar_style = original_style.clone();
+        scrollbar_style.visuals.extreme_bg_color = theme.scroll_background.into();
+        if self.state.scroll_bar_hidden || !is_prev_overflow {
+            scrollbar_style.spacing.scroll.dormant_background_opacity = 0.0;
+            scrollbar_style.spacing.scroll.dormant_handle_opacity = 0.0;
+            scrollbar_style.spacing.scroll.active_background_opacity = 0.0;
+            scrollbar_style.spacing.scroll.active_handle_opacity = 0.0;
+        } else if !self.config.scroll_bar_auto_hide {
+            scrollbar_style.spacing.scroll.dormant_background_opacity =
+                scrollbar_style.spacing.scroll.active_background_opacity;
+            scrollbar_style.spacing.scroll.dormant_handle_opacity =
+                scrollbar_style.spacing.scroll.active_handle_opacity;
+        }
+        ui.set_style(scrollbar_style);
+
+        let mut scroll_area = egui::ScrollArea::vertical()
+            .id_salt("main_scroll_area")
+            .auto_shrink(false)
+            .scroll_source(ScrollSource {
+                drag: drag_scroll,
+                ..Default::default()
+            })
+            .scroll_bar_rect(scroll_bar_rect);
+
+        let mut forced_scroll_offset = forced_scroll_offset;
+
         // Scroll active item into view if it's goes out of view.
         // During momentum scrolling, the pointer can hover over an item near the edge
         // of the window and make it active. Avoid scrolling that item into view while
         // the list is moving, because that would reset its velocity and stop the scroll.
         let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
-        let active_next_rect = active_prev_rect
-            .map(|r| {
-                if prev_flow == Some(flow.flipped()) {
-                    let axis = -prev_offset + prev_content_size / 2.0;
-                    r.translate(egui::vec2(0.0, -axis))
-                        .flipped_y()
-                        .translate(egui::vec2(0.0, axis))
-                } else {
-                    *r
-                }
-            })
-            .map(|r| r.translate(egui::vec2(0.0, prev_offset - next_offset)));
+        let active_next_rect =
+            active_prev_rect.map(|r| self.next_item_rect(*r, flow, next_offset));
         if !is_prev_scrolling
             && let Some(active_rect) = active_next_rect
             && let unpadded_scroll_rect =
@@ -904,6 +911,19 @@ impl<'a> Ui<'a> {
         };
 
         response
+    }
+
+    fn next_item_rect(&self, rect: Rect, flow: UiFlow, next_offset: f32) -> Rect {
+        let prev_offset = self.prev_pass.scroll_output.offset;
+        let rect = if self.prev_flow == Some(flow.flipped()) {
+            let axis = -prev_offset + self.prev_pass.scroll_output.content_size / 2.0;
+            rect.translate(egui::vec2(0.0, -axis))
+                .flipped_y()
+                .translate(egui::vec2(0.0, axis))
+        } else {
+            rect
+        };
+        rect.translate(egui::vec2(0.0, prev_offset - next_offset))
     }
 
     fn ribbon(&self, ui: &egui::Ui) {
