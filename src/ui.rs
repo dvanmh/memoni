@@ -1027,8 +1027,8 @@ impl<'a> Ui<'a> {
         }
 
         let global_animation_time = ui.global_style().animation_time;
-        // Close panel opened in last window showing immediately
-        ui.global_style_mut(|s| s.animation_time = if self.is_initial_run { 0.0 } else { 0.15 });
+        ui.global_style_mut(|s| s.animation_time = 0.0);
+        let mut style_reset = false;
 
         egui::Panel::bottom("search_panel")
             .resizable(false)
@@ -1036,6 +1036,7 @@ impl<'a> Ui<'a> {
             .frame(egui::Frame::new())
             .show_collapsible(ui, &mut display_search.clone(), |ui| {
                 ui.global_style_mut(|s| s.animation_time = global_animation_time);
+                style_reset = true;
 
                 egui::TextEdit::singleline(query)
                     .id(input_id)
@@ -1046,6 +1047,10 @@ impl<'a> Ui<'a> {
                     .desired_width(f32::INFINITY)
                     .show(ui);
             });
+
+        if !style_reset {
+            ui.global_style_mut(|s| s.animation_time = global_animation_time);
+        }
     }
 
     pub fn reset(&mut self) {
