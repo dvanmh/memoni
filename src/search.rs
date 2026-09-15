@@ -1,5 +1,6 @@
 use log::debug;
 use regex::Regex;
+use unicase::UniCase;
 
 use crate::{
     config::{Color, SearchModeColor},
@@ -90,6 +91,12 @@ impl Search {
             None
         };
 
+        let folded_query = if !self.query.is_empty() && self.state.mode == SearchMode::Plain {
+            Some(UniCase::new(&self.query).to_folded_case())
+        } else {
+            None
+        };
+
         self.visible_ids.clear();
 
         if self.query.is_empty() {
@@ -100,7 +107,7 @@ impl Search {
                     .iter()
                     .filter(|(_, item)| {
                         searchable_strings(item).any(|s| match self.state.mode {
-                            SearchMode::Plain => s.contains(&self.query),
+                            SearchMode::Plain => smart_contains(s, &self.query, folded_query.as_ref().unwrap()),
                             SearchMode::Regex => query_regex.as_ref().unwrap().is_match(s),
                         })
                     })
@@ -138,4 +145,13 @@ fn searchable_strings(item: &SelectionItem) -> impl Iterator<Item = &str> {
     let raw = data.all_raw.values().map(|c| c.as_ref());
 
     plain.chain(moz).chain(files).chain(raw)
+}
+
+fn smart_contains(haystack: &str, needle: &str, folded_needle: &str) -> bool {
+    if needle.chars().any(|c| c.is_uppercase()) {
+        haystack.contains(needle)
+    } else {
+        UniCase::new(haystack).to_folded_case()
+            .contains(folded_needle)
+    }
 }
