@@ -298,6 +298,14 @@ search_caret = "#ffffff"
 # default: "#005c80"
 search_selection = "#446688aa"
 
+# Search mode indicator text color
+#
+# default: plain mode - "#909090", regex mode - "#6e8bff"
+search_mode = {
+    plain = "#ff0000",
+    regex = "#0000ff",
+}
+
 
 # Selection-specific overrides
 # Any field can be overridden under [CLIPBOARD] or [PRIMARY]

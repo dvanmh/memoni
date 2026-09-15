@@ -4,10 +4,11 @@ use anyhow::Result;
 use egui::{Event, Key, Modifiers, RawInput};
 use log::{debug, trace};
 
-use crate::keymap_spec::{
-    ACTION_KEYMAPS, Action, KeyAction, KeyChord, KeyOrPointerButton, PointerAction,
+use crate::{
+    AppMode,
+    keymap_spec::{ACTION_KEYMAPS, Action, KeyAction, KeyChord, KeyOrPointerButton, PointerAction},
+    utils::is_char_key,
 };
-use crate::{AppMode, utils::is_char_key};
 
 pub struct KeymapAction {
     action_keymap_tries: HashMap<AppMode, Trie<&'static KeyChord, Action>>,
@@ -57,8 +58,8 @@ impl KeymapAction {
                     if pressed
                         && !(mode == AppMode::Search
                             && has_no_pending_keys
-                            && is_char_key(key)
-                            && (modifiers.is_none() || modifiers == Modifiers::SHIFT))
+                            && (modifiers.is_none() || modifiers == Modifiers::SHIFT)
+                            && is_char_key(key, modifiers.shift))
                     {
                         Some((
                             KeyChord {

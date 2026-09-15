@@ -151,66 +151,68 @@ pub fn is_letter_key(ks: Key) -> bool {
     )
 }
 
-pub fn is_char_key(ks: Key) -> bool {
-    matches!(
-        ks,
-        Key::Space
-            | Key::Tab
-            | Key::A
-            | Key::B
-            | Key::C
-            | Key::D
-            | Key::E
-            | Key::F
-            | Key::G
-            | Key::H
-            | Key::I
-            | Key::J
-            | Key::K
-            | Key::L
-            | Key::M
-            | Key::N
-            | Key::O
-            | Key::P
-            | Key::Q
-            | Key::R
-            | Key::S
-            | Key::T
-            | Key::U
-            | Key::V
-            | Key::W
-            | Key::X
-            | Key::Y
-            | Key::Z
-            | Key::Num1
-            | Key::Num2
-            | Key::Num3
-            | Key::Num4
-            | Key::Num5
-            | Key::Num6
-            | Key::Num7
-            | Key::Num8
-            | Key::Num9
-            | Key::Num0
-            | Key::Colon
-            | Key::Comma
-            | Key::Minus
-            | Key::Period
-            | Key::Plus
-            | Key::Equals
-            | Key::Semicolon
-            | Key::OpenBracket
-            | Key::CloseBracket
-            | Key::Backslash
-            | Key::Slash
-            | Key::Quote
-            | Key::Backtick
-            | Key::Pipe
-            | Key::Questionmark
-            | Key::Exclamationmark
-            | Key::OpenCurlyBracket
-            | Key::CloseCurlyBracket
-    )
+pub fn is_char_key(key: Key, shifted: bool) -> bool {
+    is_shiftable_char_key(key) || (!shifted && is_unshiftable_char_key(key))
+}
+
+pub fn is_shiftable_char_key(key: Key) -> bool {
+    matches!(key, |Key::A| Key::B
+        | Key::C
+        | Key::D
+        | Key::E
+        | Key::F
+        | Key::G
+        | Key::H
+        | Key::I
+        | Key::J
+        | Key::K
+        | Key::L
+        | Key::M
+        | Key::N
+        | Key::O
+        | Key::P
+        | Key::Q
+        | Key::R
+        | Key::S
+        | Key::T
+        | Key::U
+        | Key::V
+        | Key::W
+        | Key::X
+        | Key::Y
+        | Key::Z
+        | Key::Num1
+        | Key::Num2
+        | Key::Num3
+        | Key::Num4
+        | Key::Num5
+        | Key::Num6
+        | Key::Num7
+        | Key::Num8
+        | Key::Num9
+        | Key::Num0
+        | Key::Colon
+        | Key::Comma
+        | Key::Minus
+        | Key::Period
+        | Key::Plus
+        | Key::Equals
+        | Key::Semicolon
+        | Key::OpenBracket
+        | Key::CloseBracket
+        | Key::Backslash
+        | Key::Slash
+        | Key::Quote
+        | Key::Backtick
+        | Key::Pipe
+        | Key::Questionmark
+        | Key::Exclamationmark
+        | Key::OpenCurlyBracket
+        | Key::CloseCurlyBracket)
+}
+
+pub fn is_unshiftable_char_key(key: Key) -> bool {
+    matches!(key, Key::Space | Key::Tab)
 }
 
 pub fn plaintext_mime_score(mime: &str) -> Option<usize> {

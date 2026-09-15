@@ -152,8 +152,8 @@ impl<'a> Input<'a> {
                 })));
 
                 if pressed
-                    && is_char_key(key)
                     && (modifiers.is_none() || modifiers == Modifiers::SHIFT)
+                    && is_char_key(key, modifiers.shift)
                 {
                     let column = if modifiers.shift { 1 } else { 0 };
                     if let Some(ch_keysym) = self

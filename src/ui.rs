@@ -33,6 +33,7 @@ use crate::{
     freedesktop_cache::get_cached_thumbnail,
     keymap_spec::{KeyChord, ScrollAction},
     ordered_hash_map::OrderedHashMapView,
+    search::{SearchMode, SearchState},
     selection_item::{self, ActedOnUris, MozUrl, SelectionItem},
     utils::is_image_mime,
     widgets::{
@@ -349,6 +350,7 @@ impl<'a> Ui<'a> {
         active_id: &mut u64,
         pending_keys: &mut Vec<KeyChord>,
         search_query: &mut String,
+        search_state: &SearchState,
     ) -> Result<(FullOutput, Option<u64>)> {
         trace!("painting ui with flow {flow:?}");
 
@@ -420,7 +422,7 @@ impl<'a> Ui<'a> {
                 *active_id = in_view_id;
             }
 
-            self.search_panel(ui, mode == AppMode::Search, search_query);
+            self.search_panel(ui, mode == AppMode::Search, search_query, search_state);
 
             let scroll_output = egui::CentralPanel::default()
                 .frame(egui::Frame::new())
@@ -1012,8 +1014,15 @@ impl<'a> Ui<'a> {
         painter.galley(galley_pos, galley, fg_color);
     }
 
-    fn search_panel(&self, ui: &mut egui::Ui, display_search: bool, query: &mut String) {
+    fn search_panel(
+        &self,
+        ui: &mut egui::Ui,
+        display_search: bool,
+        query: &mut String,
+        state: &SearchState,
+    ) {
         let layout = &self.config.layout;
+        let theme = &self.config.theme;
         let padding_x = layout.window_padding.x
             + layout
                 .button_padding
@@ -1038,14 +1047,31 @@ impl<'a> Ui<'a> {
                 ui.global_style_mut(|s| s.animation_time = global_animation_time);
                 style_reset = true;
 
-                egui::TextEdit::singleline(query)
-                    .id(input_id)
-                    .frame(
-                        egui::Frame::new()
-                            .inner_margin(egui::Margin::symmetric(padding_x, padding_y)),
-                    )
-                    .desired_width(f32::INFINITY)
-                    .show(ui);
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(padding_x, padding_y))
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.colored_label(
+                                state.mode.color(&theme.search_mode),
+                                state.mode.label(),
+                            );
+
+                            ui.add_space(layout.button_padding.x);
+
+                            egui::TextEdit::singleline(query)
+                                .id(input_id)
+                                .frame(egui::Frame::new())
+                                .desired_width(f32::INFINITY)
+                                .text_color_opt(
+                                    if state.mode == SearchMode::Regex && state.invalid_regex {
+                                        Some(theme.error_foreground.into())
+                                    } else {
+                                        None
+                                    },
+                                )
+                                .show(ui);
+                        });
+                    });
             });
 
         if !style_reset {

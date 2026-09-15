@@ -202,6 +202,7 @@ pub struct ThemeConfig {
     pub search_caret: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub search_selection: Color,
+    pub search_mode: SearchModeColor,
 }
 
 impl Default for ThemeConfig {
@@ -223,6 +224,10 @@ impl Default for ThemeConfig {
             pin_color: Color(0xffcccccc),
             search_caret: Color(0xffc0deff),
             search_selection: Color(0xff005c80),
+            search_mode: SearchModeColor {
+                plain: Color(0xff909090),
+                regex: Color(0xff6e8bff),
+            },
         }
     }
 }
@@ -427,4 +432,13 @@ impl From<CharOrNum> for u32 {
             CharOrNum::Num(n) => n,
         }
     }
+}
+
+#[serde_as]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchModeColor {
+    #[serde_as(as = "DisplayFromStr")]
+    pub plain: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub regex: Color,
 }

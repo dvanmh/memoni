@@ -349,6 +349,11 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Key(KeyAction::Pin)),
             ),
             KeymapEntry::new(
+                &["S-Tab"],
+                "Cycle search mode (plain → regex)",
+                plain!(Action::Key(KeyAction::CycleSearchMode)),
+            ),
+            KeymapEntry::new(
                 &["Esc", "C-g"],
                 "Exit search",
                 plain!(Action::Key(KeyAction::Close)),
@@ -668,9 +673,10 @@ pub enum KeyAction {
     Scroll(ScrollAction),
     Remove,
     Pin,
-    SimpleScroll(SimpleScrollAction),
     ShowSearch,
+    CycleSearchMode,
     ShowHelp,
+    SimpleScroll(SimpleScrollAction),
     Close,
 }
 

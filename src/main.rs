@@ -487,14 +487,21 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                             paste_modifier = modifier;
                         }
 
+                        KeyAction::ShowSearch => {
+                            search.reset();
+                            info!("opening search with mode {:?}", search.state.mode);
+                            mode = AppMode::Search;
+                        }
+                        KeyAction::CycleSearchMode => {
+                            let next_search_mode = search.state.mode.cycle();
+                            info!("switching search mode to {next_search_mode:?}");
+                            search.state.mode = next_search_mode;
+                            search.refresh(&selection.items);
+                        }
+
                         KeyAction::ShowHelp => {
                             info!("switching to Help mode");
                             mode = AppMode::Help;
-                        }
-                        KeyAction::ShowSearch => {
-                            info!("opening search");
-                            search.reset();
-                            mode = AppMode::Search;
                         }
                         KeyAction::SimpleScroll(direction) => {
                             let key = match direction {
@@ -573,6 +580,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     &mut active_id,
                     &mut keymap_action.pending_keys,
                     &mut search.query,
+                    &search.state,
                 )?;
 
                 if let Some(clicked_id) = clicked_item {
