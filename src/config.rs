@@ -226,6 +226,7 @@ impl Default for ThemeConfig {
             search_selection: Color(0xff005c80),
             search_mode: SearchModeColor {
                 plain: Color(0xff909090),
+                fuzzy: Color(0xffdb6e67),
                 regex: Color(0xff6e8bff),
             },
         }
@@ -439,6 +440,8 @@ impl From<CharOrNum> for u32 {
 pub struct SearchModeColor {
     #[serde_as(as = "DisplayFromStr")]
     pub plain: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub fuzzy: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub regex: Color,
 }

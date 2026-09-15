@@ -350,7 +350,7 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
             ),
             KeymapEntry::new(
                 &["S-Tab"],
-                "Cycle search mode (plain → regex)",
+                "Cycle search mode (plain → fuzzy → regex)",
                 plain!(Action::Key(KeyAction::CycleSearchMode)),
             ),
             KeymapEntry::new(

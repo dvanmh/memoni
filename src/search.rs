@@ -11,13 +11,15 @@ use crate::{
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SearchMode {
     Plain,
+    Fuzzy,
     Regex,
 }
 
 impl SearchMode {
     pub fn cycle(self) -> Self {
         match self {
-            Self::Plain => Self::Regex,
+            Self::Plain => Self::Fuzzy,
+            Self::Fuzzy => Self::Regex,
             Self::Regex => Self::Plain,
         }
     }
@@ -25,6 +27,7 @@ impl SearchMode {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Plain => "PLAIN",
+            Self::Fuzzy => "FUZZY",
             Self::Regex => "REGEX",
         }
     }
@@ -32,6 +35,7 @@ impl SearchMode {
     pub fn color(&self, config: &SearchModeColor) -> Color {
         match self {
             Self::Plain => config.plain,
+            Self::Fuzzy => config.fuzzy,
             Self::Regex => config.regex,
         }
     }
@@ -75,44 +79,85 @@ impl Search {
     }
 
     pub fn refresh(&mut self, items: &OrderedHashMap<u64, SelectionItem>) {
-        let query_regex = if !self.query.is_empty() && self.state.mode == SearchMode::Regex {
-            match Regex::new(&self.query) {
-                Ok(re) => {
-                    self.state.invalid_regex = false;
-                    Some(re)
-                }
-                Err(err) => {
-                    debug!("invalid search regex query {:?}: {err}", self.query);
-                    self.state.invalid_regex = true;
-                    return;
-                }
-            }
-        } else {
-            None
-        };
-
-        let folded_query = if !self.query.is_empty() && self.state.mode == SearchMode::Plain {
-            Some(UniCase::new(&self.query).to_folded_case())
-        } else {
-            None
-        };
-
-        self.visible_ids.clear();
-
         if self.query.is_empty() {
+            self.visible_ids.clear();
             self.visible_ids.extend(items.iter().map(|(id, _)| *id));
-        } else {
-            self.visible_ids.extend(
-                items
-                    .iter()
-                    .filter(|(_, item)| {
-                        searchable_strings(item).any(|s| match self.state.mode {
-                            SearchMode::Plain => smart_contains(s, &self.query, folded_query.as_ref().unwrap()),
-                            SearchMode::Regex => query_regex.as_ref().unwrap().is_match(s),
+            return;
+        }
+
+        match self.state.mode {
+            SearchMode::Plain => {
+                let folded_query = UniCase::new(&self.query).to_folded_case();
+
+                self.visible_ids.clear();
+                self.visible_ids.extend(
+                    items
+                        .iter()
+                        .filter(|(_, item)| {
+                            searchable_strings(item)
+                                .any(|s| smart_contains(s, &self.query, &folded_query))
                         })
-                    })
-                    .map(|(id, _)| *id),
-            );
+                        .map(|(id, _)| *id),
+                );
+            }
+            SearchMode::Fuzzy => {
+                let mut best: Vec<Option<u16>> = vec![None; items.len()];
+
+                let mut haystacks: Vec<&str> = vec![];
+                let mut owner: Vec<usize> = vec![];
+                for (outer_idx, (_, item)) in items.iter().enumerate() {
+                    for s in searchable_strings(item) {
+                        haystacks.push(s);
+                        owner.push(outer_idx);
+                    }
+                }
+
+                let mut matcher =
+                    frizbee::Matcher::from_query(&self.query, &frizbee::Config::default());
+                let matches = matcher.match_list(&haystacks);
+                for m in &matches {
+                    let outer = owner[m.index as usize];
+                    let entry = &mut best[outer];
+                    *entry = Some(entry.map_or(m.score, |s| s.max(m.score)));
+                }
+
+                let mut results = best
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| s.map(|s| (i, s)))
+                    .collect::<Vec<_>>();
+                results.sort_unstable_by_key(|&(_, s)| std::cmp::Reverse(s));
+
+                self.visible_ids.clear();
+                self.visible_ids.extend(
+                    results
+                        .iter()
+                        .map(|(i, _)| items.get_by_index(*i).unwrap().0),
+                );
+            }
+            SearchMode::Regex => {
+                let query_regex = match Regex::new(&self.query) {
+                    Ok(re) => {
+                        self.state.invalid_regex = false;
+                        re
+                    }
+                    Err(err) => {
+                        debug!("invalid search regex query {:?}: {err}", self.query);
+                        self.state.invalid_regex = true;
+                        return;
+                    }
+                };
+
+                self.visible_ids.clear();
+                self.visible_ids.extend(
+                    items
+                        .iter()
+                        .filter(|(_, item)| {
+                            searchable_strings(item).any(|s| query_regex.is_match(s))
+                        })
+                        .map(|(id, _)| *id),
+                );
+            }
         }
     }
 }
@@ -151,7 +196,8 @@ fn smart_contains(haystack: &str, needle: &str, folded_needle: &str) -> bool {
     if needle.chars().any(|c| c.is_uppercase()) {
         haystack.contains(needle)
     } else {
-        UniCase::new(haystack).to_folded_case()
+        UniCase::new(haystack)
+            .to_folded_case()
             .contains(folded_needle)
     }
 }

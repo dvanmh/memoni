@@ -13,6 +13,7 @@ egui_glow = { version = "0.36.1", default-features = false, features = ["x11"] }
 env_logger = "0.11.8"
 fontconfig = "0.10.0"
 freedesktop-icon = "0.0.3"
+frizbee = "0.13.0"
 gethostname = "1.1.0"
 glutin = { version = "0.32.3", default-features = false, features = ["egl", "x11"] }
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "gif"] }

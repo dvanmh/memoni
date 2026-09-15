@@ -300,9 +300,10 @@ search_selection = "#446688aa"
 
 # Search mode indicator text color
 #
-# default: plain mode - "#909090", regex mode - "#6e8bff"
+# default: plain mode - "#909090", fuzzy mode - "#db6e67", regex mode - "#6e8bff"
 search_mode = {
     plain = "#ff0000",
+    fuzzy = "#00ff00",
     regex = "#0000ff",
 }
 

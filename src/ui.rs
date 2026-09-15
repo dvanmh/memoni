@@ -1050,7 +1050,12 @@ impl<'a> Ui<'a> {
                 style_reset = true;
 
                 egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(padding_x, padding_y))
+                    .inner_margin(egui::Margin {
+                        left: padding_x,
+                        right: layout.window_padding.x,
+                        top: padding_y,
+                        bottom: padding_y,
+                    })
                     .show(ui, |ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.colored_label(
