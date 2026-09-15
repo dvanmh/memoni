@@ -883,6 +883,8 @@ impl<'a> Ui<'a> {
                 current_offset,
             )
         });
+        constrain_scroll_bar_hovering_margin(ui, output.id, scroll_bar_rect, scroll_bar_margin);
+
         let (response, current_offset) = output.inner;
 
         if output.content_size.y != prev_content_size {
@@ -1657,4 +1659,39 @@ fn read_first_n_bytes<P: AsRef<Path>>(path: P, n: u64) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     File::open(path)?.take(n).read_to_end(&mut buffer)?;
     Ok(buffer)
+}
+
+fn constrain_scroll_bar_hovering_margin(
+    ui: &egui::Ui,
+    scroll_area_id: Id,
+    scroll_bar_rect: Rect,
+    margin: f32,
+) {
+    let inset = ui
+        .ctx()
+        .global_style()
+        .interaction
+        .interact_radius
+        .min(margin);
+
+    // the scroll bar rect that egui actually uses to hit-test against
+    let bar_id = scroll_area_id.with(1);
+    let Some(bar_rect) = ui
+        .viewport(|vp| vp.this_pass.widgets.get(bar_id).copied())
+        .map(|widget| widget.rect)
+    else {
+        return;
+    };
+
+    let hovered_rect = Rect::from_min_max(
+        egui::pos2(
+            bar_rect.min.x,
+            bar_rect.min.y.max(scroll_bar_rect.min.y + inset),
+        ),
+        egui::pos2(
+            bar_rect.max.x,
+            bar_rect.max.y.min(scroll_bar_rect.max.y - inset),
+        ),
+    );
+    ui.interact(hovered_rect, bar_id, egui::Sense::HOVER);
 }
