@@ -847,12 +847,12 @@ impl<'a> Ui<'a> {
         // of the window and make it active. Avoid scrolling that item into view while
         // the list is moving, because that would reset its velocity and stop the scroll.
         let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
-        let active_next_rect =
-            active_prev_rect.map(|r| self.next_item_rect(*r, flow, next_offset));
+        let active_next_rect = active_prev_rect.map(|r| self.next_item_rect(*r, flow, next_offset));
+        let next_scroll_rect = ui.available_rect_before_wrap();
         if !is_prev_scrolling
             && let Some(active_rect) = active_next_rect
             && let unpadded_scroll_rect =
-                prev_scroll_rect.shrink2(egui::vec2(0.0, padding.y as f32))
+                next_scroll_rect.shrink2(egui::vec2(0.0, padding.y as f32))
             && !unpadded_scroll_rect.contains_rect(active_rect)
         {
             debug!("scrolling active item into view");
