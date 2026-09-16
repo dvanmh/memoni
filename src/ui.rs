@@ -1053,66 +1053,79 @@ impl<'a> Ui<'a> {
                 .clamp(i8::MIN as f32, i8::MAX as f32) as i8;
         let padding_y = layout.window_padding.y;
 
+        let panel_id = Id::new("search_panel");
         let input_id = Id::new("search_input");
+
         if display_search && !ui.memory(|m| m.has_focus(input_id)) {
             ui.memory_mut(|m| m.request_focus(input_id));
+        }
+
+        // Measure search panel height so it doesn't open with a wrong one.
+        // So with 0 animation_time, the panel will show up immediately with the
+        // correct height instead of the wrong one for the first display frame.
+        let mut initial_height = None;
+        if display_search
+            && ui
+                .data_mut(|d| d.get_persisted::<egui::panel::PanelState>(panel_id))
+                .is_none()
+        {
+            // We could use request_discard here, but the "scrolling active item into view" code
+            // needs the search panel height to be correct right from the first pass of each run,
+            // so the active item can be shifted out if it's obscured by the search panel.
+            let mut child_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .sizing_pass()
+                    .invisible()
+                    .max_rect(ui.max_rect()),
+            );
+            egui::TextEdit::singleline(query)
+                .frame(egui::Frame::new())
+                .desired_width(f32::INFINITY)
+                .show(&mut child_ui);
+            let separator_height = ui.style().visuals.widgets.noninteractive.bg_stroke.width;
+
+            initial_height =
+                Some(child_ui.min_rect().height() + padding_y as f32 * 2.0 + separator_height);
+            debug!("calculated search panel's initial height: {initial_height:?}");
         }
 
         let global_animation_time = ui.global_style().animation_time;
         ui.global_style_mut(|s| s.animation_time = 0.0);
         let mut style_reset = false;
 
-        let panel_id = Id::new("search_panel");
-        if display_search
-            && ui
-                .data_mut(|d| d.get_persisted::<egui::panel::PanelState>(panel_id))
-                .is_none()
-        {
-            ui.request_discard(
-                "Measure search panel height so it doesn't open with a wrong one. \
-                 So with 0 animation_time, the panel will show up immediately with the \
-                 correct height instead of the wrong one for the first display frame.",
-            );
-        }
-
-        egui::Panel::bottom(panel_id)
+        let mut panel = egui::Panel::bottom(panel_id)
             .resizable(false)
-            .drag_to_open(false)
-            .frame(egui::Frame::new())
+            .drag_to_open(false);
+        if let Some(height) = initial_height {
+            panel = panel.exact_size(height);
+        }
+        panel
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: padding_x,
+                right: layout.window_padding.x,
+                top: padding_y,
+                bottom: padding_y,
+            }))
             .show_collapsible(ui, &mut display_search.clone(), |ui| {
                 ui.global_style_mut(|s| s.animation_time = global_animation_time);
                 style_reset = true;
 
-                egui::Frame::new()
-                    .inner_margin(egui::Margin {
-                        left: padding_x,
-                        right: layout.window_padding.x,
-                        top: padding_y,
-                        bottom: padding_y,
-                    })
-                    .show(ui, |ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.colored_label(
-                                state.mode.color(&theme.search_mode),
-                                state.mode.label(),
-                            );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.colored_label(state.mode.color(&theme.search_mode), state.mode.label());
 
-                            ui.add_space(layout.button_padding.x);
+                    ui.add_space(layout.button_padding.x);
 
-                            egui::TextEdit::singleline(query)
-                                .id(input_id)
-                                .frame(egui::Frame::new())
-                                .desired_width(f32::INFINITY)
-                                .text_color_opt(
-                                    if state.mode == SearchMode::Regex && state.invalid_regex {
-                                        Some(theme.error_foreground.into())
-                                    } else {
-                                        None
-                                    },
-                                )
-                                .show(ui);
-                        });
-                    });
+                    egui::TextEdit::singleline(query)
+                        .id(input_id)
+                        .frame(egui::Frame::new())
+                        .desired_width(f32::INFINITY)
+                        .text_color_opt(if state.mode == SearchMode::Regex && state.invalid_regex {
+                            Some(theme.error_foreground.into())
+                        } else {
+                            None
+                        })
+                        .show(ui);
+                });
             });
 
         if !style_reset {
