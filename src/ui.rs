@@ -1062,7 +1062,20 @@ impl<'a> Ui<'a> {
         ui.global_style_mut(|s| s.animation_time = 0.0);
         let mut style_reset = false;
 
-        egui::Panel::bottom("search_panel")
+        let panel_id = Id::new("search_panel");
+        if display_search
+            && ui
+                .data_mut(|d| d.get_persisted::<egui::panel::PanelState>(panel_id))
+                .is_none()
+        {
+            ui.request_discard(
+                "Measure search panel height so it doesn't open with a wrong one. \
+                 So with 0 animation_time, the panel will show up immediately with the \
+                 correct height instead of the wrong one for the first display frame.",
+            );
+        }
+
+        egui::Panel::bottom(panel_id)
             .resizable(false)
             .drag_to_open(false)
             .frame(egui::Frame::new())
