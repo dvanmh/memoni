@@ -171,12 +171,23 @@ impl HelpModal {
         .height();
 
         let end_y = binding_cursor.max.y.max(start_y + desc_height);
+        let binding_padding = if binding_cursor.max.y < end_y {
+            (end_y - binding_cursor.max.y) / 2.0
+        } else {
+            0.0
+        };
 
-        for (rect, binding) in binding_rects.iter().zip(entry.bindings) {
-            ui.scope_builder(egui::UiBuilder::new().max_rect(*rect), |ui| {
+        for (&rect, binding) in binding_rects.iter().zip(entry.bindings) {
+            let rect = if binding_padding > 0.0 {
+                rect.translate(egui::vec2(0.0, binding_padding))
+            } else {
+                rect
+            };
+
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 frame.show(ui, |ui| ui.label(*binding))
             });
-            ui.advance_cursor_after_rect(*rect);
+            ui.advance_cursor_after_rect(rect);
         }
 
         ui.painter().vline(
