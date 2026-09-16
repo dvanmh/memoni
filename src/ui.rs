@@ -115,6 +115,7 @@ struct ScrollAreaInfo {
 
 #[derive(Debug)]
 struct PrevPass {
+    flow: Option<UiFlow>,
     scroll_output: ScrollAreaInfo,
     item_widgets: HashMap<u64, (egui::Id, Rect)>,
 }
@@ -141,7 +142,6 @@ pub struct Ui<'a> {
     is_initial_run: bool,
     prev_active_id: u64,
     prev_active_idx: usize,
-    prev_flow: Option<UiFlow>,
     reset_scroll_offset_next_run: bool,
     prev_pass: PrevPass,
     state: UiState,
@@ -234,9 +234,9 @@ impl<'a> Ui<'a> {
             is_initial_run: true,
             prev_active_id: 0,
             prev_active_idx: 0,
-            prev_flow: None,
             reset_scroll_offset_next_run: false,
             prev_pass: PrevPass {
+                flow: None,
                 scroll_output: ScrollAreaInfo {
                     id: None,
                     content_size: 0.0,
@@ -505,6 +505,8 @@ impl<'a> Ui<'a> {
             self.pending_keys_overlay(ui, pending_keys);
 
             self.error_overlay(ui);
+
+            self.prev_pass.flow = Some(flow);
         });
 
         self.is_initial_run = false;
@@ -513,7 +515,6 @@ impl<'a> Ui<'a> {
             .iter()
             .position(|(id, _)| *id == *active_id)
             .unwrap_or(0);
-        self.prev_flow = Some(flow);
         self.reset_scroll_offset_next_run = false;
 
         match run_error {
@@ -915,7 +916,7 @@ impl<'a> Ui<'a> {
 
     fn next_item_rect(&self, rect: Rect, flow: UiFlow, next_offset: f32) -> Rect {
         let prev_offset = self.prev_pass.scroll_output.offset;
-        let rect = if self.prev_flow == Some(flow.flipped()) {
+        let rect = if self.prev_pass.flow == Some(flow.flipped()) {
             let axis = -prev_offset + self.prev_pass.scroll_output.content_size / 2.0;
             rect.translate(egui::vec2(0.0, -axis))
                 .flipped_y()
