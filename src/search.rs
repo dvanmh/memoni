@@ -1,6 +1,5 @@
 use log::debug;
 use regex::Regex;
-use unicase::UniCase;
 
 use crate::{
     config::{Color, SearchModeColor},
@@ -86,21 +85,7 @@ impl Search {
         }
 
         match self.state.mode {
-            SearchMode::Plain => {
-                let folded_query = UniCase::new(&self.query).to_folded_case();
-
-                self.visible_ids.clear();
-                self.visible_ids.extend(
-                    items
-                        .iter()
-                        .filter(|(_, item)| {
-                            searchable_strings(item)
-                                .any(|s| smart_contains(s, &self.query, &folded_query))
-                        })
-                        .map(|(id, _)| *id),
-                );
-            }
-            SearchMode::Fuzzy => {
+            SearchMode::Plain | SearchMode::Fuzzy => {
                 let mut best: Vec<Option<u16>> = vec![None; items.len()];
 
                 let mut haystacks: Vec<&str> = vec![];
@@ -112,8 +97,19 @@ impl Search {
                     }
                 }
 
-                let mut matcher =
-                    frizbee::Matcher::from_query(&self.query, &frizbee::Config::default());
+                let mut matcher = match self.state.mode {
+                    SearchMode::Plain => frizbee::Matcher::new(
+                        &self.query,
+                        &frizbee::Config {
+                            matching: frizbee::Matching::Substring,
+                            ..frizbee::Config::default()
+                        },
+                    ),
+                    SearchMode::Fuzzy => {
+                        frizbee::Matcher::from_query(&self.query, &frizbee::Config::default())
+                    }
+                    SearchMode::Regex => unreachable!(),
+                };
                 let matches = matcher.match_list(&haystacks);
                 for m in &matches {
                     let outer = owner[m.index as usize];
@@ -190,14 +186,4 @@ fn searchable_strings(item: &SelectionItem) -> impl Iterator<Item = &str> {
     let raw = data.all_raw.values().map(|c| c.as_ref());
 
     plain.chain(moz).chain(files).chain(raw)
-}
-
-fn smart_contains(haystack: &str, needle: &str, folded_needle: &str) -> bool {
-    if needle.chars().any(|c| c.is_uppercase()) {
-        haystack.contains(needle)
-    } else {
-        UniCase::new(haystack)
-            .to_folded_case()
-            .contains(folded_needle)
-    }
 }

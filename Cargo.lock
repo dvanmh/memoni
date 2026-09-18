@@ -1409,7 +1409,6 @@ dependencies = [
  "signal-hook",
  "signal-hook-mio",
  "toml",
- "unicase",
  "x11rb",
  "xdg-mime",
  "xkeysym",
