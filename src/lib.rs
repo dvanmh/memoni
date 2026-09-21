@@ -2,6 +2,7 @@ pub mod color;
 pub mod config;
 pub mod ext;
 pub mod freedesktop_cache;
+pub mod html_parser;
 pub mod input;
 pub mod keymap_action;
 pub mod keymap_spec;

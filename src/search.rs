@@ -173,10 +173,12 @@ fn searchable_strings(item: &SelectionItem) -> impl Iterator<Item = &str> {
     let data = item.text_data();
 
     let plain = data.plain.iter().map(|c| c.as_ref());
-    let moz = data
-        .moz_url
-        .iter()
-        .flat_map(|m| [m.src.as_str(), m.alt.as_str()]);
+    let image_metadata = [
+        data.image_metadata.src.as_deref(),
+        data.image_metadata.alt.as_deref(),
+    ]
+    .into_iter()
+    .flatten();
     let files = data.files.iter().flat_map(|f| {
         f.uris
             .iter()
@@ -185,5 +187,5 @@ fn searchable_strings(item: &SelectionItem) -> impl Iterator<Item = &str> {
     });
     let raw = data.all_raw.values().map(|c| c.as_ref());
 
-    plain.chain(moz).chain(files).chain(raw)
+    plain.chain(image_metadata).chain(files).chain(raw)
 }

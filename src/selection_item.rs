@@ -9,20 +9,23 @@ use bincode::{Decode, Encode};
 use log::debug;
 use self_cell::self_cell;
 
-use crate::utils::{is_plaintext_mime, percent_decode_lossy, utf16le_to_string};
+use crate::{
+    html_parser,
+    utils::{is_plaintext_mime, percent_decode_lossy, utf16le_to_string},
+};
 
 #[derive(Debug)]
 pub struct SelectionTextData<'a> {
     pub plain: Option<Cow<'a, str>>,
-    pub moz_url: Option<MozUrl>,
+    pub image_metadata: ImageMetadata<'a>,
     pub files: Option<ActedOnUris<'a>>,
     pub all_raw: BTreeMap<&'a str, Cow<'a, str>>,
 }
 
-#[derive(Debug)]
-pub struct MozUrl {
-    pub src: String,
-    pub alt: String,
+#[derive(Debug, Default)]
+pub struct ImageMetadata<'a> {
+    pub src: Option<Cow<'a, str>>,
+    pub alt: Option<Cow<'a, str>>,
 }
 
 #[derive(Debug)]
@@ -95,6 +98,7 @@ fn extract_text_from_data<'a>(id: u64, sel_data: &'a SelectionData) -> Selection
 
     let mut text_content = None;
     let mut moz_url = None;
+    let mut html = None;
     let mut copied_files = None;
     for (mime, data) in sel_data {
         if is_plaintext_mime(mime) {
@@ -103,18 +107,12 @@ fn extract_text_from_data<'a>(id: u64, sel_data: &'a SelectionData) -> Selection
             // Firefox encodes data with UTF-16
             // https://stackoverflow.com/a/51581772
             let data = utf16le_to_string(data);
+            let (src, alt) = data.split_once('\n').unwrap_or((data.as_str(), ""));
 
-            moz_url = Some(
-                data.split_once('\n')
-                    .map(|(s, a)| MozUrl {
-                        src: s.to_string(),
-                        alt: a.to_string(),
-                    })
-                    .unwrap_or(MozUrl {
-                        src: data.clone(),
-                        alt: "".to_string(),
-                    }),
-            );
+            moz_url = Some(ImageMetadata {
+                src: Some(Cow::Owned(src.to_string())),
+                alt: Some(Cow::Owned(alt.to_string())),
+            });
 
             all_raw.insert(mime, Cow::Owned(data));
         } else if mime == "x-special/gnome-copied-files" {
@@ -168,6 +166,9 @@ fn extract_text_from_data<'a>(id: u64, sel_data: &'a SelectionData) -> Selection
         } else if mime.starts_with("text/") {
             match str::from_utf8(data) {
                 Ok(text) => {
+                    if mime == "text/html" {
+                        html = Some(text);
+                    }
                     all_raw.insert(mime, Cow::Borrowed(text));
                 }
                 Err(err) => {
@@ -179,9 +180,17 @@ fn extract_text_from_data<'a>(id: u64, sel_data: &'a SelectionData) -> Selection
         }
     }
 
+    // Chromium provides text/x-moz-url, but Firefox only provides image metadata via text/html
+    let image_metadata = moz_url
+        .or_else(|| {
+            html.map(html_parser::image_metadata)
+                .map(|(src, alt)| ImageMetadata { src, alt })
+        })
+        .unwrap_or(ImageMetadata::default());
+
     SelectionTextData {
         plain: text_content,
-        moz_url,
+        image_metadata,
         files: copied_files,
         all_raw,
     }

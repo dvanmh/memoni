@@ -34,7 +34,7 @@ use crate::{
     keymap_spec::{KeyChord, ScrollAction},
     ordered_hash_map::OrderedHashMapView,
     search::{SearchMode, SearchState},
-    selection_item::{self, ActedOnUris, MozUrl, SelectionItem},
+    selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
     widgets::{
         clipboard_button::{ClipboardButton, ClipboardButtonState},
@@ -1264,10 +1264,10 @@ impl<'a> Ui<'a> {
                 .sublabel(RichText::new(sublabel_text).size(config.font.secondary_size))
                 .preview_background(config.theme.preview_background);
 
-            if let Some(MozUrl { src, alt }) = &text_data.moz_url {
-                if !alt.is_empty() {
-                    btn = btn.label(build_display_text(alt, &config.theme));
-                }
+            if let Some(alt) = &text_data.image_metadata.alt {
+                btn = btn.label(build_display_text(alt, &config.theme));
+            }
+            if let Some(src) = &text_data.image_metadata.src {
                 btn = btn.preview_source(src);
             }
         } else if let Some(text) = &text_data.plain {
