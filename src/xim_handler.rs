@@ -1,0 +1,216 @@
+use log::{debug, trace};
+use x11rb::protocol::xproto::KeyPressEvent;
+use xim::{AHashMap, Client, ClientCore, ClientError, ClientHandler};
+use xim::{AttributeName, InputStyle, Point};
+
+#[derive(Default, Debug)]
+pub struct XimHandler {
+    pub im_id: u16,
+    pub ic_id: u16,
+    pub connected: bool,
+    pub window: u32,
+    pub events: Vec<XimEvent>,
+    preedit: String,
+}
+
+#[derive(Debug)]
+pub enum XimEvent {
+    Forward(KeyPressEvent),
+    Egui(egui::ImeEvent),
+}
+
+impl XimHandler {
+    pub fn new(window_id: u32) -> Self {
+        Self {
+            window: window_id,
+            ..Self::default()
+        }
+    }
+}
+
+impl<C: Client<XEvent = KeyPressEvent> + ClientCore<XEvent = KeyPressEvent>> ClientHandler<C>
+    for XimHandler
+{
+    fn handle_connect(&mut self, client: &mut C) -> Result<(), ClientError> {
+        debug!("connected");
+        let locale = std::env::var("LC_ALL")
+            .or_else(|_| std::env::var("LC_CTYPE"))
+            .or_else(|_| std::env::var("LANG"))
+            .unwrap_or_else(|_| "C.UTF-8".to_string());
+        client.open(&locale)
+    }
+
+    fn handle_open(&mut self, client: &mut C, input_method_id: u16) -> Result<(), ClientError> {
+        debug!("opened");
+        self.im_id = input_method_id;
+        client.get_im_values(input_method_id, &[AttributeName::QueryInputStyle])
+    }
+
+    fn handle_get_im_values(
+        &mut self,
+        client: &mut C,
+        input_method_id: u16,
+        _attributes: AHashMap<AttributeName, Vec<u8>>,
+    ) -> Result<(), ClientError> {
+        let ic_attributes = client
+            .build_ic_attributes()
+            .push(
+                AttributeName::InputStyle,
+                InputStyle::PREEDIT_CALLBACKS | InputStyle::STATUS_NOTHING,
+            )
+            .push(AttributeName::ClientWindow, self.window)
+            .push(AttributeName::FocusWindow, self.window)
+            .nested_list(AttributeName::PreeditAttributes, |b| {
+                b.push(AttributeName::SpotLocation, Point { x: 0, y: 0 });
+            })
+            .build();
+        client.create_ic(input_method_id, ic_attributes)
+    }
+
+    fn handle_create_ic(
+        &mut self,
+        _client: &mut C,
+        input_method_id: u16,
+        input_context_id: u16,
+    ) -> Result<(), ClientError> {
+        self.connected = true;
+        self.ic_id = input_context_id;
+        debug!("IC created {}, {}", input_method_id, input_context_id);
+        Ok(())
+    }
+
+    fn handle_forward_event(
+        &mut self,
+        _client: &mut C,
+        _input_method_id: u16,
+        _input_context_id: u16,
+        _flag: xim::ForwardEventFlag,
+        xev: KeyPressEvent,
+    ) -> Result<(), ClientError> {
+        trace!("handled forward event {:?}", xev);
+        self.events.push(XimEvent::Forward(xev));
+        Ok(())
+    }
+
+    fn handle_commit(
+        &mut self,
+        _client: &mut C,
+        _input_method_id: u16,
+        _input_context_id: u16,
+        text: &str,
+    ) -> Result<(), ClientError> {
+        debug!("commited {}", text);
+        self.events
+            .push(XimEvent::Egui(egui::ImeEvent::Commit(text.to_owned())));
+        Ok(())
+    }
+
+    fn handle_disconnect(&mut self) {
+        debug!("disconnected");
+    }
+
+    fn handle_close(&mut self, client: &mut C, _input_method_id: u16) -> Result<(), ClientError> {
+        debug!("closed");
+        client.disconnect()
+    }
+
+    fn handle_destroy_ic(
+        &mut self,
+        client: &mut C,
+        input_method_id: u16,
+        _input_context_id: u16,
+    ) -> Result<(), ClientError> {
+        client.close(input_method_id)
+    }
+
+    fn handle_set_event_mask(
+        &mut self,
+        _client: &mut C,
+        input_method_id: u16,
+        input_context_id: u16,
+        forward_event_mask: u32,
+        synchronous_event_mask: u32,
+    ) -> Result<(), ClientError> {
+        debug!(
+            "set event mask {}, {}, {}, {}",
+            input_method_id, input_context_id, forward_event_mask, synchronous_event_mask
+        );
+        Ok(())
+    }
+
+    fn handle_preedit_start(
+        &mut self,
+        _client: &mut C,
+        input_method_id: u16,
+        input_context_id: u16,
+    ) -> Result<(), ClientError> {
+        trace!("preedit start {}, {}", input_method_id, input_context_id);
+        Ok(())
+    }
+
+    fn handle_preedit_done(
+        &mut self,
+        _client: &mut C,
+        input_method_id: u16,
+        input_context_id: u16,
+    ) -> Result<(), ClientError> {
+        trace!("preedit done {}, {}", input_method_id, input_context_id);
+        self.preedit.clear();
+        self.events.push(XimEvent::Egui(egui::ImeEvent::Preedit {
+            text: String::new(),
+            active_range_chars: None,
+        }));
+        Ok(())
+    }
+
+    fn handle_preedit_draw(
+        &mut self,
+        _client: &mut C,
+        _input_method_id: u16,
+        _input_context_id: u16,
+        caret: i32,
+        chg_first: i32,
+        chg_len: i32,
+        _status: xim::PreeditDrawStatus,
+        preedit_string: &str,
+        _feedbacks: Vec<xim::Feedback>,
+    ) -> Result<(), ClientError> {
+        trace!("preedit: {preedit_string}, first={chg_first} len={chg_len} caret={caret}");
+
+        replace_char_range(
+            &mut self.preedit,
+            chg_first as usize,
+            chg_len as usize,
+            preedit_string,
+        );
+
+        let active_range_chars = if !self.preedit.is_empty() {
+            Some(0..self.preedit.chars().count())
+        } else {
+            None
+        };
+
+        self.events.push(XimEvent::Egui(egui::ImeEvent::Preedit {
+            text: self.preedit.clone(),
+            active_range_chars,
+        }));
+
+        Ok(())
+    }
+}
+
+fn replace_char_range(text: &mut String, first: usize, length: usize, replacement: &str) {
+    let start = text
+        .char_indices()
+        .nth(first)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len());
+
+    let end = text
+        .char_indices()
+        .nth(first + length)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len());
+
+    text.replace_range(start..end, replacement);
+}

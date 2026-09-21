@@ -398,7 +398,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     }
                 }
 
-                input.handle_event(&event);
+                input.handle_event(&event, mode == AppMode::Search)?;
                 if let Some((new_selection_item, removed_selection_items)) =
                     selection.handle_event(&event)?
                 {
@@ -638,6 +638,10 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     search.visible_ids.first().copied().unwrap_or(0)
                 };
                 ui.reset_scroll_offset();
+            }
+
+            if mode != prev_mode && (mode == AppMode::Search || prev_mode == AppMode::Search) {
+                input.handle_emit_text_events_changed(mode == AppMode::Search)?;
             }
 
             first_loop = false;
