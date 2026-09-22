@@ -51,6 +51,44 @@ window_position_mode = ["active_pointer", "monitor"]
 # default: ["^[Ff]irefox"]
 middle_click_delay_windows = ["^[Ff]irefox"]
 
+# Command to run when the IME switch keymap is pressed
+#
+# Since memoni grabs all keyboard input while shown, the normal IME hotkey cannot be
+# used inside memoni. Use this to forward an IME switch command instead.
+#
+# The command is run through "sh -c". Example for ibus:
+# """
+#   engines=$(gsettings get org.freedesktop.ibus.general preload-engines | tr -d "[]',")
+#   current=$(ibus engine)
+#
+#   first_engine=""
+#   next_engine=""
+#   found_current=0
+#   for engine in $engines; do
+#       if [ -z "$first_engine" ]; then
+#           first_engine="$engine"
+#       fi
+#
+#       if [ "$found_current" -eq 1 ]; then
+#           next_engine="$engine"
+#           break
+#       fi
+#
+#       if [ "$engine" = "$current" ]; then
+#           found_current=1
+#       fi
+#   done
+#
+#   if [ -z "$next_engine" ]; then
+#       next_engine="$first_engine"
+#   fi
+#
+#   ibus engine "$next_engine"
+# """
+#
+# default: unset
+switch_ime_command = "ibus engine xkb:us::eng"
+
 
 # Application-specific paste keymaps for CLIPBOARD selection
 #

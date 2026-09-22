@@ -150,7 +150,32 @@ impl<'a> Input<'a> {
                 )
             }
             X11Event::KeyPress(ev) | X11Event::KeyRelease(ev) => 'blk: {
-                if forward_xim && self.xim_handler.connected {
+                let pressed = matches!(event, X11Event::KeyPress(_));
+                let keycode = ev.detail;
+                let Some(keysym) = self.key_converter.keycode_to_keysym(keycode.into()) else {
+                    trace!("unknown keycode: {keycode}");
+                    break 'blk Box::new(iter::empty());
+                };
+
+                let mut next_modifiers = *modifiers;
+                if keysym.is_modifier_key() {
+                    if keysym == Keysym::Alt_L || keysym == Keysym::Alt_R {
+                        next_modifiers.alt = pressed;
+                    }
+                    if keysym == Keysym::Control_L || keysym == Keysym::Control_R {
+                        next_modifiers.ctrl = pressed;
+                    }
+                    if keysym == Keysym::Shift_L || keysym == Keysym::Shift_R {
+                        next_modifiers.shift = pressed;
+                    }
+                    if keysym == Keysym::Super_L || keysym == Keysym::Super_R {
+                        // egui has no Super slot on Linux, so repurpose the unused-on-Linux mac_cmd bit for it
+                        next_modifiers.mac_cmd = pressed;
+                    }
+                }
+
+                // XIM servers don't forward back Super keymaps
+                if !next_modifiers.mac_cmd && forward_xim && self.xim_handler.connected {
                     trace!("forwarding key event to XIM server: {ev:?}");
                     self.xim_client.forward_event(
                         self.xim_handler.im_id,
@@ -161,39 +186,18 @@ impl<'a> Input<'a> {
                     break 'blk Box::new(iter::empty());
                 }
 
-                let pressed = matches!(event, X11Event::KeyPress(_));
-                let keycode = ev.detail;
-
                 let mut event_iter: Box<dyn Iterator<Item = Event>> = Box::new(iter::empty());
 
-                let Some(keysym) = self.key_converter.keycode_to_keysym(keycode.into()) else {
-                    trace!("unknown keycode: {keycode}");
-                    break 'blk event_iter;
-                };
-
                 if keysym.is_modifier_key() {
-                    let mut modifiers_updated = false;
-                    if keysym == Keysym::Alt_L || keysym == Keysym::Alt_R {
-                        modifiers_updated = true;
-                        modifiers.alt = pressed;
-                    }
-                    if keysym == Keysym::Control_L || keysym == Keysym::Control_R {
-                        modifiers_updated = true;
-                        modifiers.ctrl = pressed;
-                    }
-                    if keysym == Keysym::Shift_L || keysym == Keysym::Shift_R {
-                        modifiers_updated = true;
-                        modifiers.shift = pressed;
-                    }
-
-                    if !modifiers_updated {
-                        trace!("ignoring modifier: {keysym:?}");
+                    if next_modifiers == *modifiers {
+                        debug!("ignoring modifier: {keysym:?}");
                         break 'blk event_iter;
                     }
 
+                    *modifiers = next_modifiers;
                     trace!("modifiers updated: {modifiers:?}");
                     event_iter =
-                        Box::new(event_iter.chain(iter::once(Event::ModifiersChanged(*modifiers))))
+                        Box::new(event_iter.chain(iter::once(Event::ModifiersChanged(*modifiers))));
                 }
 
                 let Some(key) = keysym_to_egui_key(Keysym::new(keysym.into())) else {

@@ -354,6 +354,11 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Key(KeyAction::CycleSearchMode)),
             ),
             KeymapEntry::new(
+                &["Super-Space"],
+                "Switch input method",
+                plain!(Action::Key(KeyAction::SwitchIme)),
+            ),
+            KeymapEntry::new(
                 &["Esc", "C-g"],
                 "Exit search",
                 plain!(Action::Key(KeyAction::Close)),
@@ -468,6 +473,9 @@ impl fmt::Display for KeyChord {
         if self.mods.contains(Modifiers::SHIFT) {
             write_part("S")?;
         }
+        if self.mods.contains(Modifiers::MAC_CMD) {
+            write_part("Super")?;
+        }
 
         write_part(&self.key.name())?;
 
@@ -485,6 +493,7 @@ impl KeyChord {
                 "C" => Modifiers::CTRL,
                 "S" => Modifiers::SHIFT,
                 "M" => Modifiers::ALT,
+                "Super" => Modifiers::MAC_CMD,
                 _ => unreachable!(),
             };
             chord = rest;
@@ -509,9 +518,10 @@ impl KeyChord {
     }
 
     fn strip_mod(name: &str) -> Option<(&str, &str)> {
-        ["C-", "S-", "M-"]
-            .into_iter()
-            .find_map(|prefix| name.strip_prefix(prefix).map(|key| (&prefix[..1], key)))
+        ["C-", "S-", "M-", "Super-"].into_iter().find_map(|prefix| {
+            name.strip_prefix(prefix)
+                .map(|key| (&prefix[..prefix.len() - 1], key))
+        })
     }
 
     fn expand_range(name: &str) -> Option<Result<Box<dyn Iterator<Item = String>>>> {
@@ -675,6 +685,7 @@ pub enum KeyAction {
     Pin,
     ShowSearch,
     CycleSearchMode,
+    SwitchIme,
     ShowHelp,
     SimpleScroll(SimpleScrollAction),
     Close,

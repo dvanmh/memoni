@@ -50,6 +50,8 @@ pub struct Config {
     #[serde(skip)]
     pub middle_click_delay_patterns: Vec<Regex>,
 
+    pub switch_ime_command: Option<String>,
+
     #[optional(optional_type)]
     pub layout: LayoutConfig,
     #[optional(optional_type)]
@@ -70,6 +72,7 @@ impl Default for Config {
             app_paste_keymaps: Default::default(),
             middle_click_delay_windows: vec!["^[Ff]irefox".to_string()],
             middle_click_delay_patterns: vec![],
+            switch_ime_command: None,
             layout: Default::default(),
             font: Default::default(),
             theme: Default::default(),

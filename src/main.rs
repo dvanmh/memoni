@@ -24,6 +24,7 @@ use std::{
     io::{self, Read, Write},
     os::fd::{AsFd as _, AsRawFd as _},
     path::Path,
+    process::Stdio,
     time::Duration,
 };
 use x11rb::connection::Connection;
@@ -498,6 +499,26 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                             search.state.mode = next_search_mode;
                             search.refresh(&selection.items);
                         }
+                        KeyAction::SwitchIme => match &config.switch_ime_command {
+                            Some(command) => {
+                                debug!("switching IME with command: {command:?}");
+                                let command = command.clone();
+                                std::thread::spawn(move || {
+                                    let result = std::process::Command::new("sh")
+                                        .arg("-c")
+                                        .arg(&command)
+                                        .stdout(Stdio::null())
+                                        .stderr(Stdio::null())
+                                        .status();
+                                    if let Err(e) = result {
+                                        warn!("failed to run IME switch command: {e}");
+                                    }
+                                });
+                            }
+                            None => warn!(
+                                "received IME switch keymap but switch_ime_command is not configured"
+                            ),
+                        },
 
                         KeyAction::ShowHelp => {
                             info!("switching to Help mode");
