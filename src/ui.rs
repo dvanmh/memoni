@@ -1056,7 +1056,10 @@ impl<'a> Ui<'a> {
         let panel_id = Id::new("search_panel");
         let input_id = Id::new("search_input");
 
-        if display_search && !ui.memory(|m| m.has_focus(input_id)) {
+        let about_to_expand = display_search && !ui.memory(|m| m.has_focus(input_id));
+        let about_to_collapse = !display_search && ui.memory(|m| m.has_focus(input_id));
+
+        if about_to_expand {
             ui.memory_mut(|m| m.request_focus(input_id));
         }
 
@@ -1090,8 +1093,10 @@ impl<'a> Ui<'a> {
         }
 
         let global_animation_time = ui.global_style().animation_time;
-        ui.global_style_mut(|s| s.animation_time = 0.0);
-        let mut style_reset = false;
+        let animation_time_overridden = about_to_expand || about_to_collapse;
+        if animation_time_overridden {
+            ui.global_style_mut(|s| s.animation_time = 0.0);
+        }
 
         let mut panel = egui::Panel::bottom(panel_id)
             .resizable(false)
@@ -1107,9 +1112,6 @@ impl<'a> Ui<'a> {
                 bottom: padding_y,
             }))
             .show_collapsible(ui, &mut display_search.clone(), |ui| {
-                ui.global_style_mut(|s| s.animation_time = global_animation_time);
-                style_reset = true;
-
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.colored_label(state.mode.color(&theme.search_mode), state.mode.label());
 
@@ -1128,13 +1130,13 @@ impl<'a> Ui<'a> {
                 });
             });
 
-        if !style_reset {
+        if animation_time_overridden {
             ui.global_style_mut(|s| s.animation_time = global_animation_time);
         }
 
         // Render text edit one more frame to let it process the unfocused event.
         // This helps it reset various states (e.g. caret style while composing ime).
-        if !display_search && ui.memory(|m| m.has_focus(input_id)) {
+        if about_to_collapse {
             self.egui_ctx.memory_mut(|m| m.surrender_focus(input_id));
 
             let mut child_ui = ui.new_child(
