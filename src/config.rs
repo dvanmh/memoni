@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use egui::Color32;
 use egui::ecolor::ParseHexColorError;
 use log::{debug, info};
@@ -277,8 +277,8 @@ impl Config {
 
         info!("loading config from {config_path:?}");
         let config_content = fs::read_to_string(&config_path)?;
-        let config_set: ConfigSet =
-            toml::from_str(&config_content).context("Failed to parse config file")?;
+        let config_set: ConfigSet = toml::from_str(&config_content)
+            .map_err(|e| anyhow!("Failed to parse config file\n    {}", e.message()))?;
 
         let mut config = default_config
             .with_optional(config_set.common)
