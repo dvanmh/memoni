@@ -1131,6 +1131,22 @@ impl<'a> Ui<'a> {
         if !style_reset {
             ui.global_style_mut(|s| s.animation_time = global_animation_time);
         }
+
+        // Render text edit one more frame to let it process the unfocused event.
+        // This helps it reset various states (e.g. caret style while composing ime).
+        if !display_search && ui.memory(|m| m.has_focus(input_id)) {
+            self.egui_ctx.memory_mut(|m| m.surrender_focus(input_id));
+
+            let mut child_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .sizing_pass()
+                    .invisible()
+                    .max_rect(ui.max_rect()),
+            );
+            egui::TextEdit::singleline(&mut "")
+                .id(input_id)
+                .show(&mut child_ui);
+        }
     }
 
     pub fn reset(&mut self) {

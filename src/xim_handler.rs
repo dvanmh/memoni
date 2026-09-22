@@ -99,7 +99,7 @@ impl<C: Client<XEvent = KeyPressEvent> + ClientCore<XEvent = KeyPressEvent>> Cli
         _input_context_id: u16,
         text: &str,
     ) -> Result<(), ClientError> {
-        debug!("commited {}", text);
+        debug!("committed {:?}", text);
         self.events
             .push(XimEvent::Egui(egui::ImeEvent::Commit(text.to_owned())));
         Ok(())
@@ -175,7 +175,7 @@ impl<C: Client<XEvent = KeyPressEvent> + ClientCore<XEvent = KeyPressEvent>> Cli
         preedit_string: &str,
         _feedbacks: Vec<xim::Feedback>,
     ) -> Result<(), ClientError> {
-        trace!("preedit: {preedit_string}, first={chg_first} len={chg_len} caret={caret}");
+        trace!("preedit: {preedit_string:?}, first={chg_first} len={chg_len} caret={caret}");
 
         replace_char_range(
             &mut self.preedit,
