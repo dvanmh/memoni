@@ -38,6 +38,7 @@ const SIGNAL_TOKEN: mio::Token = mio::Token(1);
 const MEMONI_TOKEN: mio::Token = mio::Token(2);
 const KEYBOARD_GRAB_RETRY_TOKEN: mio::Token = mio::Token(3);
 const POINTER_GRAB_RETRY_TOKEN: mio::Token = mio::Token(4);
+const IME_WATCH_TOKEN: mio::Token = mio::Token(5);
 
 enum Args {
     Client(ClientArgs),
@@ -249,6 +250,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
         ui.build_button_widget(item)?;
     }
 
+    let mut ime_watch_registered = false;
     let (mut poll, socket_listener, mut signals, keyboard_grab_timer, pointer_grab_timer) =
         match create_poll(&window.conn, socket_path) {
             Ok(res) => res,
@@ -349,6 +351,9 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                         pointer_grab_timer.clear_event()?;
                         window.grab_pointer(&pointer_grab_timer)?;
                     }
+                    IME_WATCH_TOKEN => {
+                        input.on_ime_watch_ready()?;
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -400,6 +405,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 }
 
                 input.handle_event(&event, mode == AppMode::Search)?;
+                input.take_ime_events()?;
                 if let Some((new_selection_item, removed_selection_items)) =
                     selection.handle_event(&event)?
                 {
@@ -439,6 +445,23 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
             }
 
             if first_loop || items_updated || window_shown || will_show_window {
+                // Watch for ibus address file changes whenever we have no IME backend (armed
+                // inside Watchers; registered here once per new fd)
+                if !input.ime_connected()
+                    && !ime_watch_registered
+                    && let Some(fd) = input.ime_watch_fd()
+                {
+                    let mut source = SourceFd(&fd.as_raw_fd());
+                    match poll.registry().register(
+                        &mut source,
+                        IME_WATCH_TOKEN,
+                        mio::Interest::READABLE,
+                    ) {
+                        Ok(()) => ime_watch_registered = true,
+                        Err(e) => warn!("failed to register ime watch fd: {e}"),
+                    }
+                }
+
                 if first_loop {
                     debug!("pre-rendering the window on startup");
                 }

@@ -3,6 +3,7 @@ pub mod config;
 pub mod ext;
 pub mod freedesktop_cache;
 pub mod html_parser;
+pub mod ime;
 pub mod input;
 pub mod keymap_action;
 pub mod keymap_spec;
@@ -19,7 +20,6 @@ pub mod utils;
 pub mod widgets;
 pub mod x11_key_converter;
 pub mod x11_window;
-pub mod xim_handler;
 
 pub use ext::ScrollAreaStateExt;
 
