@@ -212,6 +212,14 @@ impl<'a> Selection<'a> {
             match event {
                 // Capture copied data
                 Event::XfixesSelectionNotify(ev) => {
+                    if ev.selection != self.selection_atom {
+                        debug!(
+                            "ignoring selection notification for other selection {:?}",
+                            ev.selection
+                        );
+                        break 'blk;
+                    }
+
                     if ev.owner == paste_window {
                         debug!("ignoring selection notification from ourselves");
                         break 'blk;
@@ -271,6 +279,14 @@ impl<'a> Selection<'a> {
                     }
                 }
                 Event::SelectionNotify(ev) => {
+                    if ev.selection != self.selection_atom {
+                        debug!(
+                            "ignoring selection notification for other selection {:?}",
+                            ev.selection
+                        );
+                        break 'blk;
+                    }
+
                     let transfer_window = ev.requestor;
                     let Some(task) = self.request_tasks.get_mut(&transfer_window) else {
                         warn!(
@@ -428,6 +444,11 @@ impl<'a> Selection<'a> {
                 Event::PropertyNotify(ev)
                     if !self.incr_paste_tasks.contains_key(&(ev.window, ev.atom)) =>
                 {
+                    if ev.window == self.window.screen.root {
+                        trace!("ignoring root window property change: {:?}", ev.atom);
+                        break 'blk;
+                    }
+
                     if ev.atom == self.atoms._NET_WM_NAME {
                         trace!("ignoring window name property change");
                         break 'blk;

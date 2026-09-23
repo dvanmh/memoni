@@ -175,7 +175,10 @@ impl<C: Client<XEvent = KeyPressEvent> + ClientCore<XEvent = KeyPressEvent>> Cli
         preedit_string: &str,
         _feedbacks: Vec<xim::Feedback>,
     ) -> Result<(), ClientError> {
-        trace!("preedit: {preedit_string:?}, first={chg_first} len={chg_len} caret={caret}");
+        trace!(
+            "current: {:?} preedit: {preedit_string:?}, first={chg_first} len={chg_len} caret={caret}",
+            self.preedit
+        );
 
         replace_char_range(
             &mut self.preedit,
