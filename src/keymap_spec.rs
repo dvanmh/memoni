@@ -428,19 +428,21 @@ impl KeymapEntry {
                 match itertools::process_results(binding.split(" ").map(KeyChord::parse), |it| {
                     it.multi_cartesian_product()
                 }) {
-                    Ok(it) => Either::Left(it.enumerate().map(Ok)),
+                    Ok(it) => Either::Left(it.map(Ok)),
                     Err(e) => Either::Right(iter::once(Err(e))),
                 }
             })
-            .map_ok(|(i, chords)| {
+            .enumerate()
+            .map(|(i, chords)| {
+                let chords = chords?;
                 let source = match chords.last().map(|chord| chord.key) {
                     Some(KeyOrPointerButton::PointerButton(_)) => Source::Pointer,
                     _ => Source::Key,
                 };
-                KeyBinding {
+                Ok(KeyBinding {
                     keys: chords,
                     action: (self.action)(i, source),
-                }
+                })
             })
             .collect::<Result<Vec<_>>>()
     }
