@@ -345,6 +345,11 @@ search_mode = {
     regex = "#0000ff",
 }
 
+# Search match highlight color in items
+#
+# default: "#d48e4c60"
+search_match = "#00a5ff80"
+
 
 # Selection-specific overrides
 # Any field can be overridden under [CLIPBOARD] or [PRIMARY]

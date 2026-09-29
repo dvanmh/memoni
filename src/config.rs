@@ -206,6 +206,8 @@ pub struct ThemeConfig {
     #[serde_as(as = "DisplayFromStr")]
     pub search_selection: Color,
     pub search_mode: SearchModeColor,
+    #[serde_as(as = "DisplayFromStr")]
+    pub search_match: Color,
 }
 
 impl Default for ThemeConfig {
@@ -213,7 +215,7 @@ impl Default for ThemeConfig {
         Self {
             background: Color(0xff191919),
             foreground: Color(0xffcccccc),
-            muted_foreground: Color(0xff707070),
+            muted_foreground: Color(0x60d1d1d1),
             button_background: Color(0xff2f2f2f),
             button_active_background: Color(0xff454545),
             scroll_background: Color(0xff0a0a0a),
@@ -232,6 +234,7 @@ impl Default for ThemeConfig {
                 fuzzy: Color(0xffdb6e67),
                 regex: Color(0xff6e8bff),
             },
+            search_match: Color(0x60d48e4c),
         }
     }
 }

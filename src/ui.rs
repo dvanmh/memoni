@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::CString,
-    fs, mem,
+    fs,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, LazyLock},
@@ -11,8 +11,8 @@ use std::{
 use anyhow::{Result, anyhow};
 use egui::{
     Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak,
-    FullOutput, Id, LayerId, Order, Pos2, RawInput, Rect, RichText, Stroke, TextureHandle,
-    TextureOptions, Vec2,
+    FullOutput, Id, LayerId, Order, Pos2, RawInput, Rect, Stroke, TextureHandle, TextureOptions,
+    Vec2,
     emath::GuiRounding as _,
     epaint,
     scroll_area::{DragScroll, ScrollSource},
@@ -25,16 +25,18 @@ use xdg_mime::SharedMimeInfo;
 use crate::{
     AppMode, ScrollAreaStateExt,
     color::parse_color,
-    config::{Config, Dimensions, LayoutConfig, ThemeConfig},
+    config::{Config, Dimensions, LayoutConfig},
     ext::RectExt as _,
     freedesktop_cache::get_cached_thumbnail,
     keymap_spec::{KeyChord, ScrollAction},
-    ordered_hash_map::OrderedHashMapView,
-    search::{SearchMode, SearchState},
+    ordered_hash_map::{OrderedHashMap, OrderedHashMapView},
+    search::{SearchMatch, SearchMode, SearchState},
     selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
     widgets::{
-        clipboard_button::{ClipboardButton, ClipboardButtonState},
+        clipboard_button::{
+            ClipboardButton, ClipboardButtonHighlight, ClipboardButtonState, ClipboardButtonTexts,
+        },
         help_modal::HelpModal,
     },
 };
@@ -131,6 +133,7 @@ pub struct Ui<'a> {
     config: &'a Config,
     fonts: FontDefinitions,
     button_widgets: HashMap<u64, ClipboardButton>,
+    highlights: HashMap<u64, ClipboardButtonTexts<ClipboardButtonHighlight>>,
     fallback: Fallback,
     help_modal: HelpModal,
     color_preview_background_texture: TextureHandle,
@@ -218,6 +221,7 @@ impl<'a> Ui<'a> {
             config,
             fonts,
             button_widgets: HashMap::new(),
+            highlights: HashMap::new(),
             fallback: Fallback {
                 image: fallback_img,
                 file: fallback_file,
@@ -261,6 +265,7 @@ impl<'a> Ui<'a> {
 
         debug!("clearing button widgets");
         self.button_widgets.clear();
+        self.highlights.clear();
     }
 
     fn create_egui_context(config: &Config) -> egui::Context {
@@ -457,14 +462,16 @@ impl<'a> Ui<'a> {
                             if sf.config.show_quick_paste_hint && i < 10 {
                                 state = state.keyboard_hint(HINTS[i]);
                             }
+                            if mode == AppMode::Search && let Some(hls) = sf.highlights.get(&id) {
+                                state = state.highlights(hls);
+                            }
 
                             let btn_widget = sf
                                 .button_widgets
-                                .get(&item.id())
-                                .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?
-                                .with_state(state);
+                                .get_mut(&item.id())
+                                .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?;
 
-                            let btn = ui.push_id(id, |ui| ui.add(btn_widget)).inner;
+                            let btn = btn_widget.ui(ui, state);
                             sf.prev_pass
                                 .item_widgets
                                 .insert(item.id(), (btn.id, btn.rect));
@@ -1153,6 +1160,7 @@ impl<'a> Ui<'a> {
         self.is_initial_run = true;
         self.help_modal.hide();
         self.error_message = None;
+        self.highlights.clear();
         self.state = UiState {
             pointer_acted: false,
             pointer_pos: Pos2::ZERO,
@@ -1213,9 +1221,16 @@ impl<'a> Ui<'a> {
         }
 
         let mut btn = ClipboardButton::default()
-            .secondary_foreground(config.theme.muted_foreground)
+            .id(item.id())
             .underline_offset(config.font.underline_offset)
             .with_preview_padding(config.layout.button_with_preview_padding)
+            .keyboard_hint_foreground(config.theme.muted_foreground)
+            .search_match_background(config.theme.search_match)
+            .label_size(config.font.size)
+            .label_color(config.theme.foreground)
+            .sublabel_size(config.font.secondary_size)
+            .sublabel_color(config.theme.muted_foreground)
+            .muted_color(config.theme.muted_foreground)
             .pin_size(config.layout.pin_size)
             .pin_color(config.theme.pin_color)
             .color_preview_size(config.layout.color_preview_size)
@@ -1228,11 +1243,8 @@ impl<'a> Ui<'a> {
         }) = &text_data.files
         {
             let mut path_iter = files.iter();
-            if let Some(path) = path_iter.next() {
-                btn = btn.append_label(vec![path.display.as_ref().into()]);
-            }
-            if let Some(path) = path_iter.next() {
-                btn = btn.append_label(vec![path.display.as_ref().into()]);
+            for path in path_iter.by_ref().take(2) {
+                btn = btn.append_label(path.display.as_ref());
             }
             let more_count = path_iter.count();
 
@@ -1247,9 +1259,7 @@ impl<'a> Ui<'a> {
             }
 
             if !sublabel_text.is_empty() {
-                btn = btn.sublabel(
-                    RichText::new(sublabel_text.to_uppercase()).size(config.font.secondary_size),
-                )
+                btn = btn.sublabel(&sublabel_text.to_uppercase());
             }
 
             let thumbnail = create_files_thumbnail(
@@ -1276,30 +1286,75 @@ impl<'a> Ui<'a> {
 
             btn = btn
                 .preview(texture, config.layout.preview_size)
-                .sublabel(RichText::new(sublabel_text).size(config.font.secondary_size))
+                .sublabel(&sublabel_text)
                 .preview_background(config.theme.preview_background);
 
             if let Some(alt) = &text_data.image_metadata.alt {
-                btn = btn.label(build_display_text(alt, &config.theme));
+                btn = btn.label(alt);
             }
             if let Some(src) = &text_data.image_metadata.src {
                 btn = btn.preview_source(src);
             }
         } else if let Some(text) = &text_data.plain {
-            btn = btn.label(build_display_text(text, &config.theme));
+            btn = btn.label(text);
             if config.layout.show_color_preview
                 && let Some(color) = parse_color(text)
             {
                 btn = btn.color_preview(color);
             }
         } else {
-            btn = btn.label(vec![
-                RichText::new("[unknown]").color(config.theme.muted_foreground),
-            ]);
+            btn = btn.muted_label("[unknown]");
         }
 
         self.button_widgets.insert(item.id(), btn);
         Ok(())
+    }
+
+    pub fn build_button_highlights(
+        &mut self,
+        items: &OrderedHashMap<u64, SelectionItem>,
+        visible_ids: &[u64],
+        matches: &[SearchMatch],
+    ) {
+        self.highlights.clear();
+
+        for (&id, m) in visible_ids.iter().zip(matches) {
+            let Some(item_texts) = items.get(&id).map(|i| i.text_data()) else {
+                warn!("missing selection item {id}");
+                continue;
+            };
+            let Some(button) = self.button_widgets.get(&id) else {
+                warn!("missing button widget for item {id}");
+                continue;
+            };
+
+            let mut texts_with_hls: ClipboardButtonTexts<(&str, &[u32])> =
+                ClipboardButtonTexts::default();
+
+            if button.preview.is_some() {
+                if let Some(ref files) = item_texts.files {
+                    texts_with_hls.labels = files
+                        .uris
+                        .iter()
+                        .zip(&m.file_uris)
+                        .map(|(t, m)| (t.display.as_ref(), m.as_slice()))
+                        .collect();
+                    texts_with_hls.sublabel = Some((&files.action, m.file_action.as_slice()));
+                } else {
+                    if let Some(ref alt) = item_texts.image_metadata.alt {
+                        texts_with_hls.labels.push((alt, m.image_alt.as_slice()));
+                    }
+                    if let Some(ref src) = item_texts.image_metadata.src {
+                        texts_with_hls.preview_source = Some((src, m.image_src.as_slice()));
+                    }
+                }
+            } else if let Some(ref plain) = item_texts.plain {
+                texts_with_hls.labels.push((plain, m.plain.as_slice()));
+            }
+
+            self.highlights
+                .insert(id, button.build_highlight(texts_with_hls));
+        }
     }
 
     pub fn remove_button_widgets<I: IntoIterator<Item = SelectionItem>>(
@@ -1611,86 +1666,6 @@ fn make_alpha_checkerboard_image(cell_count_per_line: usize) -> ColorImage {
     }
 
     ColorImage::new([size, size], pixels)
-}
-
-fn build_display_text(s: &str, theme: &ThemeConfig) -> Vec<RichText> {
-    let mut text = vec![];
-    let mut chars = s.chars();
-
-    let mut last_non_whitespace = None;
-    let mut trailing_whitespace_str = String::new();
-    let mut trailing_count = 0;
-    while let Some(c) = chars.next_back() {
-        trailing_count += 1;
-        if c == ' ' {
-            trailing_whitespace_str.push('·');
-        } else {
-            last_non_whitespace = Some(c);
-            break;
-        }
-    }
-
-    let mut str = String::with_capacity(s.len());
-    let mut chars = chars.enumerate().peekable();
-    let mut is_leading_whitespace = true;
-    let mut i_c = chars.next().or_else(|| {
-        last_non_whitespace.map(|c| {
-            last_non_whitespace = None;
-            (0, c)
-        })
-    });
-    while let Some((i, c)) = i_c {
-        // Very very long string causes egui to choke on first render, even when we only display it
-        // on a single line
-        if i == (10_000 - trailing_count) && chars.peek().is_some() {
-            if is_leading_whitespace {
-                text.push(RichText::new(str).color(theme.muted_foreground));
-            }
-            text.push("…".into());
-            return text;
-        }
-
-        if c != ' ' && is_leading_whitespace {
-            is_leading_whitespace = false;
-            let prev_str = mem::take(&mut str);
-            text.push(RichText::new(prev_str).color(theme.muted_foreground));
-        }
-
-        match c {
-            '\r' => {
-                let prev_str = mem::take(&mut str);
-                text.push(prev_str.into());
-                text.push(RichText::new('␍').color(theme.muted_foreground));
-            }
-            '\n' => {
-                let prev_str = mem::take(&mut str);
-                text.push(prev_str.into());
-                text.push(RichText::new('↵').color(theme.muted_foreground));
-            }
-            '\t' => {
-                let prev_str = mem::take(&mut str);
-                text.push(prev_str.into());
-                text.push(RichText::new(" ⇥ ").color(theme.muted_foreground));
-            }
-            ' ' if is_leading_whitespace => {
-                str.push('·');
-            }
-            _ => str.push(c),
-        }
-
-        i_c = chars.next();
-        if i_c.is_none()
-            && let Some(last_c) = last_non_whitespace
-        {
-            i_c = Some((i + 1, last_c));
-            last_non_whitespace = None;
-        }
-    }
-
-    text.push(str.into());
-    text.push(RichText::new(trailing_whitespace_str).color(theme.muted_foreground));
-
-    text
 }
 
 fn constrain_scroll_bar_hovering_margin(

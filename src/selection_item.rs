@@ -250,3 +250,39 @@ fn format_path_display<'a>(path: &'a Path, home: &Option<PathBuf>) -> Cow<'a, st
         tilded
     }
 }
+
+impl<'a> SelectionTextData<'a> {
+    pub fn flatten(&'a self) -> impl Iterator<Item = (&'a str, TextDataTag<'a>)> {
+        let plain = self.plain.iter().map(|c| (c.as_ref(), TextDataTag::Plain));
+        let image_metadata = [
+            (self.image_metadata.src.as_deref(), TextDataTag::ImageSrc),
+            (self.image_metadata.alt.as_deref(), TextDataTag::ImageAlt),
+        ]
+        .into_iter()
+        .filter_map(|(s, t)| s.map(|s| (s, t)));
+        let files = self.files.iter().flat_map(|f| {
+            std::iter::once((f.action.as_ref(), TextDataTag::FileAction)).chain(
+                f.uris
+                    .iter()
+                    .enumerate()
+                    .map(|(i, u)| (u.display.as_ref(), TextDataTag::FileUri(i))),
+            )
+        });
+        let raw = self
+            .all_raw
+            .iter()
+            .map(|(&k, v)| (v.as_ref(), TextDataTag::Raw { mime: k }));
+
+        plain.chain(image_metadata).chain(files).chain(raw)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum TextDataTag<'a> {
+    Plain,
+    ImageSrc,
+    ImageAlt,
+    FileAction,
+    FileUri(usize),
+    Raw { mime: &'a str },
+}
