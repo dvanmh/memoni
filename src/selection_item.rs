@@ -125,7 +125,11 @@ fn extract_text_from_data<'a>(id: u64, sel_data: &'a SelectionData) -> Selection
 
             let action = iter
                 .next()
-                .map(|l| String::from_utf8_lossy(l.strip_suffix(b"\r").unwrap_or(l)))
+                .map(|l| {
+                    Cow::Owned(
+                        String::from_utf8_lossy(l.strip_suffix(b"\r").unwrap_or(l)).to_uppercase(),
+                    )
+                })
                 .unwrap_or(Cow::Borrowed(""));
             copied_files = Some(ActedOnUris {
                 action,
@@ -249,4 +253,40 @@ fn format_path_display<'a>(path: &'a Path, home: &Option<PathBuf>) -> Cow<'a, st
     } else {
         tilded
     }
+}
+
+impl<'a> SelectionTextData<'a> {
+    pub fn flatten(&'a self) -> impl Iterator<Item = (&'a str, TextDataTag<'a>)> {
+        let plain = self.plain.iter().map(|c| (c.as_ref(), TextDataTag::Plain));
+        let image_metadata = [
+            (self.image_metadata.src.as_deref(), TextDataTag::ImageSrc),
+            (self.image_metadata.alt.as_deref(), TextDataTag::ImageAlt),
+        ]
+        .into_iter()
+        .filter_map(|(s, t)| s.map(|s| (s, t)));
+        let files = self.files.iter().flat_map(|f| {
+            std::iter::once((f.action.as_ref(), TextDataTag::FileAction)).chain(
+                f.uris
+                    .iter()
+                    .enumerate()
+                    .map(|(i, u)| (u.display.as_ref(), TextDataTag::FileUri(i))),
+            )
+        });
+        let raw = self
+            .all_raw
+            .iter()
+            .map(|(&k, v)| (v.as_ref(), TextDataTag::Raw { mime: k }));
+
+        plain.chain(image_metadata).chain(files).chain(raw)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum TextDataTag<'a> {
+    Plain,
+    ImageSrc,
+    ImageAlt,
+    FileAction,
+    FileUri(usize),
+    Raw { mime: &'a str },
 }
