@@ -410,6 +410,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
 
                     if mode == AppMode::Search {
                         search.refresh(&selection.items);
+                        ui.invalidate_text_caches();
                         active_id = search.visible_ids.first().copied().unwrap_or(0);
                         ui.reset_scroll_offset();
                     }
@@ -558,6 +559,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                 info!("exiting search mode");
                                 if !search.query.is_empty() {
                                     active_id = selection.get_first_unpinned_item();
+                                    ui.invalidate_text_caches();
                                     ui.reset_scroll_offset();
                                 }
                                 mode = AppMode::Normal;
@@ -572,6 +574,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
 
                 if mode != prev_mode && mode == AppMode::Search {
                     search.refresh(&selection.items);
+                    ui.invalidate_text_caches();
                 }
 
                 let selection_items_view = match mode {
@@ -602,6 +605,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     ui_flow,
                     &selection_items_view,
                     &scroll_actions,
+                    &search.matches,
                     &mut active_id,
                     &mut keymap_action.pending_keys,
                     &mut search.query,
@@ -661,6 +665,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
 
             if mode == AppMode::Search && (search.query_changed() || search.mode_changed()) {
                 search.refresh(&selection.items);
+                ui.invalidate_text_caches();
                 active_id = if search.query.is_empty() {
                     selection.get_first_unpinned_item()
                 } else {

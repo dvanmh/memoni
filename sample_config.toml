@@ -268,7 +268,7 @@ foreground = "#eeeeee"
 
 # Muted text color
 #
-# default: "#707070"
+# default: "#d1d1d160"
 muted_foreground = "#b0b0b0"
 
 # Button background
@@ -344,6 +344,11 @@ search_mode = {
     fuzzy = "#00ff00",
     regex = "#0000ff",
 }
+
+# Search match highlight color in items
+#
+# default: "#d48e4c60"
+search_match = "#00a5ff80"
 
 
 # Selection-specific overrides

@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::CString,
-    fs, mem,
+    fs,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, LazyLock},
@@ -11,8 +11,8 @@ use std::{
 use anyhow::{Result, anyhow};
 use egui::{
     Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak,
-    FullOutput, Id, LayerId, Order, Pos2, RawInput, Rect, RichText, Stroke, TextureHandle,
-    TextureOptions, Vec2,
+    FullOutput, Id, LayerId, Order, Pos2, RawInput, Rect, Stroke, TextureHandle, TextureOptions,
+    Vec2,
     emath::GuiRounding as _,
     epaint,
     scroll_area::{DragScroll, ScrollSource},
@@ -25,16 +25,16 @@ use xdg_mime::SharedMimeInfo;
 use crate::{
     AppMode, ScrollAreaStateExt,
     color::parse_color,
-    config::{Config, Dimensions, LayoutConfig, ThemeConfig},
+    config::{Config, Dimensions, LayoutConfig},
     ext::RectExt as _,
     freedesktop_cache::get_cached_thumbnail,
     keymap_spec::{KeyChord, ScrollAction},
     ordered_hash_map::OrderedHashMapView,
-    search::{SearchMode, SearchState},
+    search::{SearchMatch, SearchMode, SearchState},
     selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
     widgets::{
-        clipboard_button::{ClipboardButton, ClipboardButtonState},
+        clipboard_button::{ButtonTexts, ClipboardButton, ClipboardButtonState},
         help_modal::HelpModal,
     },
 };
@@ -344,6 +344,7 @@ impl<'a> Ui<'a> {
         flow: UiFlow,
         selection_items: &OrderedHashMapView<u64, SelectionItem>,
         scroll_actions: &[ScrollAction],
+        matches: &[SearchMatch],
         active_id: &mut u64,
         pending_keys: &mut Vec<KeyChord>,
         search_query: &mut String,
@@ -451,20 +452,25 @@ impl<'a> Ui<'a> {
                             let is_active = id == *active_id;
                             let is_pinned = item.is_pinned();
 
+                            let btn_widget = sf.button_widgets.get_mut(&item.id()).ok_or_else(
+                                || anyhow!("missing button widget for item {}", item.id()),
+                            )?;
+
                             let mut state = ClipboardButtonState::default()
                                 .is_active(is_active)
                                 .is_pinned(is_pinned);
                             if sf.config.show_quick_paste_hint && i < 10 {
                                 state = state.keyboard_hint(HINTS[i]);
                             }
+                            if mode == AppMode::Search && let Some(m) = matches.get(i) {
+                                state = state.matches(match_texts(
+                                    item,
+                                    m,
+                                    btn_widget.preview.is_some(),
+                                ));
+                            }
 
-                            let btn_widget = sf
-                                .button_widgets
-                                .get(&item.id())
-                                .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?
-                                .with_state(state);
-
-                            let btn = ui.push_id(id, |ui| ui.add(btn_widget)).inner;
+                            let btn = btn_widget.ui(ui, state);
                             sf.prev_pass
                                 .item_widgets
                                 .insert(item.id(), (btn.id, btn.rect));
@@ -1150,6 +1156,12 @@ impl<'a> Ui<'a> {
         }
     }
 
+    pub fn invalidate_text_caches(&mut self) {
+        for button in self.button_widgets.values_mut() {
+            button.invalidate_text_cache();
+        }
+    }
+
     pub fn reset(&mut self) {
         info!("resetting ui states");
         self.is_initial_run = true;
@@ -1162,6 +1174,7 @@ impl<'a> Ui<'a> {
             scroll_bar_hidden: self.config.scroll_bar_auto_hide,
             removed_item_rect: None,
         };
+        self.invalidate_text_caches();
     }
 
     pub fn reset_scroll_offset(&mut self) {
@@ -1215,9 +1228,16 @@ impl<'a> Ui<'a> {
         }
 
         let mut btn = ClipboardButton::default()
-            .secondary_foreground(config.theme.muted_foreground)
+            .id(item.id())
             .underline_offset(config.font.underline_offset)
             .with_preview_padding(config.layout.button_with_preview_padding)
+            .keyboard_hint_foreground(config.theme.muted_foreground)
+            .search_match_background(config.theme.search_match)
+            .label_size(config.font.size)
+            .label_color(config.theme.foreground)
+            .sublabel_size(config.font.secondary_size)
+            .sublabel_color(config.theme.muted_foreground)
+            .muted_color(config.theme.muted_foreground)
             .pin_size(config.layout.pin_size)
             .pin_color(config.theme.pin_color)
             .color_preview_size(config.layout.color_preview_size)
@@ -1230,11 +1250,8 @@ impl<'a> Ui<'a> {
         }) = &text_data.files
         {
             let mut path_iter = files.iter();
-            if let Some(path) = path_iter.next() {
-                btn = btn.append_label(vec![path.display.as_ref().into()]);
-            }
-            if let Some(path) = path_iter.next() {
-                btn = btn.append_label(vec![path.display.as_ref().into()]);
+            for path in path_iter.by_ref().take(2) {
+                btn = btn.append_label(path.display.as_ref());
             }
             let more_count = path_iter.count();
 
@@ -1249,9 +1266,7 @@ impl<'a> Ui<'a> {
             }
 
             if !sublabel_text.is_empty() {
-                btn = btn.sublabel(
-                    RichText::new(sublabel_text.to_uppercase()).size(config.font.secondary_size),
-                )
+                btn = btn.sublabel(&sublabel_text);
             }
 
             let thumbnail = create_files_thumbnail(
@@ -1278,26 +1293,24 @@ impl<'a> Ui<'a> {
 
             btn = btn
                 .preview(texture, config.layout.preview_size)
-                .sublabel(RichText::new(sublabel_text).size(config.font.secondary_size))
+                .sublabel(&sublabel_text)
                 .preview_background(config.theme.preview_background);
 
             if let Some(alt) = &text_data.image_metadata.alt {
-                btn = btn.label(build_display_text(alt, &config.theme));
+                btn = btn.label(alt);
             }
             if let Some(src) = &text_data.image_metadata.src {
                 btn = btn.preview_source(src);
             }
         } else if let Some(text) = &text_data.plain {
-            btn = btn.label(build_display_text(text, &config.theme));
+            btn = btn.label(text);
             if config.layout.show_color_preview
                 && let Some(color) = parse_color(text)
             {
                 btn = btn.color_preview(color);
             }
         } else {
-            btn = btn.label(vec![
-                RichText::new("[unknown]").color(config.theme.muted_foreground),
-            ]);
+            btn = btn.muted_label("[unknown]");
         }
 
         self.button_widgets.insert(item.id(), btn);
@@ -1313,6 +1326,38 @@ impl<'a> Ui<'a> {
             self.button_widgets.remove(&item.id());
         }
     }
+}
+
+fn match_texts<'a>(
+    item: &'a SelectionItem,
+    m: &'a SearchMatch,
+    has_preview: bool,
+) -> ButtonTexts<(&'a str, &'a [u32])> {
+    let item_texts = item.text_data();
+    let mut texts: ButtonTexts<(&str, &[u32])> = ButtonTexts::default();
+
+    if has_preview {
+        if let Some(ref files) = item_texts.files {
+            texts.labels = files
+                .uris
+                .iter()
+                .zip(&m.file_uris)
+                .map(|(t, m)| (t.display.as_ref(), m.as_slice()))
+                .collect();
+            texts.sublabel = Some((&files.action, m.file_action.as_slice()));
+        } else {
+            if let Some(ref alt) = item_texts.image_metadata.alt {
+                texts.labels.push((alt.as_ref(), m.image_alt.as_slice()));
+            }
+            if let Some(ref src) = item_texts.image_metadata.src {
+                texts.preview_source = Some((src.as_ref(), m.image_src.as_slice()));
+            }
+        }
+    } else if let Some(ref plain) = item_texts.plain {
+        texts.labels.push((plain.as_ref(), m.plain.as_slice()));
+    }
+
+    texts
 }
 
 fn find_item_at_distance_from(
@@ -1613,86 +1658,6 @@ fn make_alpha_checkerboard_image(cell_count_per_line: usize) -> ColorImage {
     }
 
     ColorImage::new([size, size], pixels)
-}
-
-fn build_display_text(s: &str, theme: &ThemeConfig) -> Vec<RichText> {
-    let mut text = vec![];
-    let mut chars = s.chars();
-
-    let mut last_non_whitespace = None;
-    let mut trailing_whitespace_str = String::new();
-    let mut trailing_count = 0;
-    while let Some(c) = chars.next_back() {
-        trailing_count += 1;
-        if c == ' ' {
-            trailing_whitespace_str.push('·');
-        } else {
-            last_non_whitespace = Some(c);
-            break;
-        }
-    }
-
-    let mut str = String::with_capacity(s.len());
-    let mut chars = chars.enumerate().peekable();
-    let mut is_leading_whitespace = true;
-    let mut i_c = chars.next().or_else(|| {
-        last_non_whitespace.map(|c| {
-            last_non_whitespace = None;
-            (0, c)
-        })
-    });
-    while let Some((i, c)) = i_c {
-        // Very very long string causes egui to choke on first render, even when we only display it
-        // on a single line
-        if i == (10_000 - trailing_count) && chars.peek().is_some() {
-            if is_leading_whitespace {
-                text.push(RichText::new(str).color(theme.muted_foreground));
-            }
-            text.push("…".into());
-            return text;
-        }
-
-        if c != ' ' && is_leading_whitespace {
-            is_leading_whitespace = false;
-            let prev_str = mem::take(&mut str);
-            text.push(RichText::new(prev_str).color(theme.muted_foreground));
-        }
-
-        match c {
-            '\r' => {
-                let prev_str = mem::take(&mut str);
-                text.push(prev_str.into());
-                text.push(RichText::new('␍').color(theme.muted_foreground));
-            }
-            '\n' => {
-                let prev_str = mem::take(&mut str);
-                text.push(prev_str.into());
-                text.push(RichText::new('↵').color(theme.muted_foreground));
-            }
-            '\t' => {
-                let prev_str = mem::take(&mut str);
-                text.push(prev_str.into());
-                text.push(RichText::new(" ⇥ ").color(theme.muted_foreground));
-            }
-            ' ' if is_leading_whitespace => {
-                str.push('·');
-            }
-            _ => str.push(c),
-        }
-
-        i_c = chars.next();
-        if i_c.is_none()
-            && let Some(last_c) = last_non_whitespace
-        {
-            i_c = Some((i + 1, last_c));
-            last_non_whitespace = None;
-        }
-    }
-
-    text.push(str.into());
-    text.push(RichText::new(trailing_whitespace_str).color(theme.muted_foreground));
-
-    text
 }
 
 fn constrain_scroll_bar_hovering_margin(
