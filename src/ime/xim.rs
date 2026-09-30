@@ -12,6 +12,7 @@ use x11rb::{
     xcb_ffi::XCBConnection,
 };
 use xim::{Client as _, ClientError};
+use xkeysym::Keysym;
 
 use super::{ImeBackend, ImeEvent};
 use crate::{
@@ -199,7 +200,7 @@ impl<'a> ImeBackend<'a> for XimBackend<'a> {
         Ok(handled_by_xim)
     }
 
-    fn forward_key(&mut self, event: &KeyPressEvent) -> Result<bool> {
+    fn forward_key(&mut self, event: &KeyPressEvent, _keysym: Option<Keysym>) -> Result<bool> {
         let Some(xim_client) = self.client.as_mut() else {
             return Ok(false);
         };

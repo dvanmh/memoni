@@ -193,7 +193,11 @@ impl<'a> Input<'a> {
                     && ime.active()
                 {
                     trace!("forwarding key event to IME server: {ev:?}");
-                    let consumed = ime.forward_key(ev)?;
+                    let ime_keysym = self.key_converter.keycode_to_keysym_column(
+                        keycode.into(),
+                        u8::from(ev.state.contains(KeyButMask::SHIFT)),
+                    );
+                    let consumed = ime.forward_key(ev, ime_keysym)?;
                     if ime.is_dead() {
                         warn!("IME backend died while forwarding key, disabling IME forwarding");
                         ime_died = true;

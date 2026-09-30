@@ -9,6 +9,7 @@ use egui::Rect;
 use log::{debug, info, warn};
 use x11rb::protocol::Event as X11Event;
 use x11rb::protocol::xproto::KeyPressEvent;
+use xkeysym::Keysym;
 
 use crate::x11_window::X11Window;
 
@@ -23,9 +24,10 @@ pub trait ImeBackend<'a> {
     fn handle_x11_event(&mut self, event: &X11Event, emit_text_events: bool) -> Result<bool>;
     fn take_events(&mut self) -> Vec<ImeEvent>;
 
-    /// Ask the IME to process a raw key event. Returns true if the IME consumed it. A dead
-    /// backend returns false, checked via `is_dead`.
-    fn forward_key(&mut self, event: &KeyPressEvent) -> Result<bool>;
+    /// Ask the IME to process a raw key event. `keysym` is the key's symbol as the X server
+    /// reports it (shift level applied), which backends without access to the keymap need.
+    /// Returns true if the IME consumed it. A dead backend returns false, checked via `is_dead`.
+    fn forward_key(&mut self, event: &KeyPressEvent, keysym: Option<Keysym>) -> Result<bool>;
 
     fn is_dead(&self) -> bool;
     fn active(&self) -> bool;

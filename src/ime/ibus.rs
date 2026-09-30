@@ -8,6 +8,7 @@ use egui::Rect;
 use log::{debug, info, trace, warn};
 use x11rb::protocol::xproto::KeyPressEvent;
 use x11rb::protocol::{Event as X11Event, xproto::KeyButMask};
+use xkeysym::Keysym;
 use zbus::blocking::connection::Builder as BlockingConnectionBuilder;
 use zbus::blocking::{Connection, Proxy, fdo::DBusProxy};
 use zbus::zvariant::{ObjectPath, Value};
@@ -26,6 +27,17 @@ const IBUS_MOD1_MASK: u32 = 1 << 3;
 const XKB_SHIFT_MASK: u16 = 1 << 0;
 const XKB_CONTROL_MASK: u16 = 1 << 2;
 const XKB_MOD1_MASK: u16 = 1 << 3;
+
+const IBUS_CAP_PREEDIT_TEXT: u32 = 1 << 0;
+const IBUS_CAP_AUXILIARY_TEXT: u32 = 1 << 1;
+const IBUS_CAP_LOOKUP_TABLE: u32 = 1 << 2;
+const IBUS_CAP_FOCUS: u32 = 1 << 3;
+const IBUS_CAP_PROPERTY: u32 = 1 << 4;
+const IBUS_CAPABILITIES: u32 = IBUS_CAP_FOCUS
+    | IBUS_CAP_PREEDIT_TEXT
+    | IBUS_CAP_AUXILIARY_TEXT
+    | IBUS_CAP_LOOKUP_TABLE
+    | IBUS_CAP_PROPERTY;
 
 const SIGNAL_CHANNEL_CAPACITY: usize = 64;
 
@@ -73,6 +85,17 @@ impl IbusBackend {
 
         let context_path = context_path.to_owned();
         info!("created ibus input context at {context_path}");
+
+        {
+            let proxy = Proxy::new(
+                &connection,
+                IBUS_BUS_NAME,
+                context_path.as_str(),
+                "org.freedesktop.IBus.InputContext",
+            )?;
+            // Without declared capabilities the daemon rejects FocusIn and never processes keys
+            proxy.call_noreply("SetCapabilities", &(IBUS_CAPABILITIES,))?;
+        }
 
         let (signal_sender, signal_receiver) = sync_channel(SIGNAL_CHANNEL_CAPACITY);
         let thread_connection = connection.clone();
@@ -213,7 +236,7 @@ fn run_signal_listener(
                 }
                 "UpdatePreeditTextWithMode" => {
                     let body = message.body();
-                    let (text, _cursor, _pos, visible, _mode): (Value, u32, u32, bool, u32) =
+                    let (text, _cursor, visible, _mode): (Value, u32, bool, u32) =
                         body.deserialize()?;
                     IbusSignal::Preedit {
                         text: value_into_string(text)?,
@@ -222,8 +245,7 @@ fn run_signal_listener(
                 }
                 "UpdatePreeditText" => {
                     let body = message.body();
-                    let (text, _cursor, _pos, visible): (Value, u32, u32, bool) =
-                        body.deserialize()?;
+                    let (text, _cursor, visible): (Value, u32, bool) = body.deserialize()?;
                     IbusSignal::Preedit {
                         text: value_into_string(text)?,
                         visible,
@@ -259,6 +281,11 @@ fn value_into_string(value: Value) -> Result<String> {
     match value {
         Value::Str(s) => Ok(s.as_str().to_owned()),
         Value::Value(inner) => value_into_string(*inner),
+        // engines serialize text as IBusText: a (sa{sv}sv) struct of ("IBusText", attrs, text, attrs)
+        Value::Structure(s) => match s.into_fields().into_iter().nth(2) {
+            Some(text) => value_into_string(text),
+            None => bail!("IBusText value is missing its text field"),
+        },
         other => bail!("unexpected value type for text: {other:?}"),
     }
 }
@@ -332,17 +359,21 @@ impl<'a> ImeBackend<'a> for IbusBackend {
         events
     }
 
-    fn forward_key(&mut self, event: &KeyPressEvent) -> Result<bool> {
+    fn forward_key(&mut self, event: &KeyPressEvent, keysym: Option<Keysym>) -> Result<bool> {
         if self.dead {
             return Ok(false);
         }
 
+        let keyval = keysym.map_or(0, u32::from);
         let keycode = u32::from(event.detail.saturating_sub(8));
-        let state = x_state_to_ibus_state(u16::from(event.state));
-        trace!("ProcessKeyEvent keycode={keycode} state={state:#x}");
+        let mut state = x_state_to_ibus_state(u16::from(event.state));
+        if event.response_type & 0x7f == x11rb::protocol::xproto::KEY_RELEASE_EVENT {
+            state |= IBUS_RELEASE_MASK;
+        }
+        trace!("ProcessKeyEvent keyval={keyval:#x} keycode={keycode} state={state:#x}");
 
         let proxy = self.context_proxy()?;
-        let result = proxy.call::<_, _, bool>("ProcessKeyEvent", &(0u32, keycode, state));
+        let result = proxy.call::<_, _, bool>("ProcessKeyEvent", &(keyval, keycode, state));
         drop(proxy);
         match result {
             Ok(handled) => {
