@@ -267,7 +267,11 @@ impl<'a> Input<'a> {
 
                 if keysym.is_modifier_key() {
                     if next_modifiers == *modifiers {
-                        debug!("ignoring modifier: {keysym:?}");
+                        if keysym.raw() != xkeysym::key::Caps_Lock {
+                            debug!("ignoring modifier: {keysym:?}");
+                        } else {
+                            trace!("ignoring CapsLock modifier event, CapsLock state is read directly when processing other key events");
+                        }
                         break 'blk event_iter;
                     }
 
