@@ -1259,7 +1259,7 @@ impl<'a> Ui<'a> {
             }
 
             if !sublabel_text.is_empty() {
-                btn = btn.sublabel(&sublabel_text.to_uppercase());
+                btn = btn.sublabel(&sublabel_text);
             }
 
             let thumbnail = create_files_thumbnail(

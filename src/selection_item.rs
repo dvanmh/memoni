@@ -125,7 +125,11 @@ fn extract_text_from_data<'a>(id: u64, sel_data: &'a SelectionData) -> Selection
 
             let action = iter
                 .next()
-                .map(|l| String::from_utf8_lossy(l.strip_suffix(b"\r").unwrap_or(l)))
+                .map(|l| {
+                    Cow::Owned(
+                        String::from_utf8_lossy(l.strip_suffix(b"\r").unwrap_or(l)).to_uppercase(),
+                    )
+                })
                 .unwrap_or(Cow::Borrowed(""));
             copied_files = Some(ActedOnUris {
                 action,

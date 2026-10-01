@@ -1,12 +1,12 @@
-use std::{mem, range::Range, sync::Arc};
+use std::{iter::Peekable, mem, range::Range, slice::Iter, sync::Arc};
 
 use egui::{
-    Color32, CornerRadius, FontId, Image, Pos2, Rect, Response, RichText, Sense, Stroke,
+    Color32, CornerRadius, FontId, Galley, Image, Pos2, Rect, Response, RichText, Sense, Stroke,
     StrokeKind, TextFormat, TextStyle, TextWrapMode, TextureHandle, Ui, UiBuilder, Vec2,
     WidgetText, text::LayoutJob,
 };
 
-const DISPLAY_LIMIT: usize = 1_000;
+const DISPLAY_LIMIT: usize = 1000;
 const SEARCH_MATCH_CONTEXT_LIMIT: usize = 12;
 
 #[derive(Default)]
@@ -289,19 +289,19 @@ impl ClipboardButton {
                 };
 
                 if state.highlights.is_none() {
+                    let rendered_glyph_len =
+                        |g: &Galley| g.rows[0].row.glyphs.len() - if g.elided { 1 } else { 0 };
+
                     self.rendered_lengths_cache.labels.clear();
                     for galley in &label_galleys {
-                        self.rendered_lengths_cache.labels.push(
-                            galley.rows[0].row.glyphs.len() - if galley.elided { 1 } else { 0 },
-                        );
+                        self.rendered_lengths_cache
+                            .labels
+                            .push(rendered_glyph_len(galley));
                     }
-                    self.rendered_lengths_cache.sublabel = sublabel_galley.as_ref().map(|galley| {
-                        galley.rows[0].row.glyphs.len() - if galley.elided { 1 } else { 0 }
-                    });
+                    self.rendered_lengths_cache.sublabel =
+                        sublabel_galley.as_deref().map(rendered_glyph_len);
                     self.rendered_lengths_cache.preview_source =
-                        img_src_galley.as_ref().map(|galley| {
-                            galley.rows[0].row.glyphs.len() - if galley.elided { 1 } else { 0 }
-                        });
+                        img_src_galley.as_deref().map(rendered_glyph_len);
                 }
 
                 let text_height = label_galleys.iter().fold(0.0, |acc, g| acc + g.size().y)
@@ -323,7 +323,6 @@ impl ClipboardButton {
                 let (rect, _) =
                     ui.allocate_exact_size(Vec2::new(desired_width, desired_height), Sense::HOVER);
 
-                // TODO: can we use this to prevent cloning widget texts?
                 if ui.is_rect_visible(rect) {
                     let visuals = &ui.style().visuals.widgets.inactive;
                     let bg_fill = if is_active {
@@ -332,18 +331,16 @@ impl ClipboardButton {
                         visuals.weak_bg_fill
                     };
 
-                    let label_ell = ui.painter().layout_no_wrap(
+                    let label_ellipsis = ui.painter().layout_no_wrap(
                         "…".into(),
                         FontId::proportional(self.label_size),
                         self.muted_color,
                     );
-                    let label_ell_w = label_ell.size().x;
-                    let sublabel_ell = ui.painter().layout_no_wrap(
+                    let sublabel_ellipsis = ui.painter().layout_no_wrap(
                         "…".into(),
                         FontId::proportional(self.sublabel_size),
                         self.muted_color,
                     );
-                    let sublabel_ell_w = sublabel_ell.size().x;
 
                     ui.painter().rect(
                         rect,
@@ -407,193 +404,63 @@ impl ClipboardButton {
 
                     cursor_x += padding.x;
                     let mut cursor_y = rect.min.y + padding.y;
-                    for mut galley in label_galleys {
-                        let mut text_pos = Pos2::new(cursor_x, cursor_y);
+                    for (i, galley) in label_galleys.into_iter().enumerate() {
+                        let text_pos = Pos2::new(cursor_x, cursor_y);
                         cursor_y += galley.size().y;
 
-                        // TODO: do this for other texts than just the first label
-                        let mut override_stuffs = None;
-                        let mut highlight_rects = vec![];
-                        if let Some(hl) = state.highlights
-                            && !hl.labels.is_empty()
-                        {
-                            if let Some(override_text) = &hl.labels[0].override_text {
-                                let override_galley = override_text.text.clone().into_galley(
-                                    ui,
-                                    Some(TextWrapMode::Extend),
-                                    f32::INFINITY,
-                                    TextStyle::Button,
-                                );
-
-                                let placed_row = &override_galley.rows[0];
-                                let row = &placed_row.row;
-                                let mut start_glyph_idx = override_text.start_glyph_idx;
-                                let start_glyph = row.glyphs[start_glyph_idx];
-                                let mut render_to_end_width = row.size.x - start_glyph.pos.x;
-
-                                let leading_ellipsis =
-                                    override_text.has_leading || override_text.start_glyph_idx > 0;
-                                let trailing_ellipsis = override_text.has_trailing
-                                    || render_to_end_width
-                                        > text_width
-                                            - if leading_ellipsis { label_ell_w } else { 0.0 };
-
-                                // If the highlight-focused galley has empty space at the end,
-                                // scroll some of the start glyphs in to fill it
-                                let render_width = text_width
-                                    - if leading_ellipsis { label_ell_w } else { 0.0 }
-                                    - if trailing_ellipsis { label_ell_w } else { 0.0 };
-                                loop {
-                                    if start_glyph_idx == 0 {
-                                        break;
-                                    }
-
-                                    render_to_end_width += row.glyphs[start_glyph_idx].pos.x
-                                        - row.glyphs[start_glyph_idx - 1].pos.x;
-                                    if render_to_end_width > render_width {
-                                        break;
-                                    }
-
-                                    start_glyph_idx -= 1;
-                                }
-
-                                override_stuffs =
-                                    Some((start_glyph_idx, leading_ellipsis, trailing_ellipsis));
-                                galley = override_galley;
-                            }
-
-                            let placed_row = &galley.rows[0];
-                            let row = &placed_row.row;
-                            let row_top = placed_row.pos.y;
-                            let row_bottom = row_top + row.size.y;
-
-                            let (elide_len, elide_pos) =
-                                if galley.elided && galley.job.wrap.overflow_character.is_some() {
-                                    (1, row.glyphs.last().map(|g| g.pos.x))
-                                } else {
-                                    (0, None)
-                                };
-
-                            // LayoutJob's TextFormat's `background` only highlights each section separatedly,
-                            // and each section can have different height and position
-                            for &Range { start, end } in &hl.labels[0].highlight {
-                                let glyph_len = row.glyphs.len() - elide_len;
-                                if start >= glyph_len {
-                                    break;
-                                }
-                                let end = end.min(glyph_len);
-
-                                let x_min = placed_row.pos.x + row.glyphs[start].pos.x;
-                                let x_max = if end < glyph_len {
-                                    placed_row.pos.x + row.glyphs[end].pos.x
-                                } else {
-                                    placed_row.pos.x + elide_pos.unwrap_or(row.size.x)
-                                };
-
-                                highlight_rects.push(Rect::from_min_max(
-                                    egui::pos2(x_min, row_top),
-                                    egui::pos2(x_max, row_bottom),
-                                ));
-                            }
-                        }
-
-                        if let Some((start_glyph_idx, leading_ellipsis, trailing_ellipsis)) =
-                            override_stuffs
-                        {
-                            let placed_row = &galley.rows[0];
-                            let row = &placed_row.row;
-                            let start_glyph = row.glyphs[start_glyph_idx];
-
-                            let mut clip_width = text_width;
-                            if leading_ellipsis {
-                                ui.painter().galley(
-                                    text_pos,
-                                    label_ell.clone(),
-                                    visuals.text_color(),
-                                );
-
-                                text_pos += egui::vec2(label_ell_w, 0.0);
-                                clip_width -= label_ell_w;
-                            }
-                            if trailing_ellipsis {
-                                clip_width -= label_ell_w;
-
-                                let mut total_render_glyph_width = 0.0;
-                                let mut prev_glyph_x = start_glyph.pos.x;
-                                for i in start_glyph_idx + 1..row.glyphs.len() {
-                                    let new_total_width = total_render_glyph_width
-                                        + row.glyphs[i].pos.x
-                                        - prev_glyph_x;
-                                    if new_total_width > clip_width {
-                                        break;
-                                    }
-
-                                    total_render_glyph_width = new_total_width;
-                                    prev_glyph_x = row.glyphs[i].pos.x;
-                                }
-                                clip_width = total_render_glyph_width;
-                            }
-
-                            let clip_rect = Rect::from_min_size(
-                                text_pos,
-                                egui::vec2(clip_width, galley.size().y),
-                            );
-
-                            text_pos -= egui::vec2(start_glyph.pos.x, 0.0);
-
-                            let p = ui.painter().with_clip_rect(clip_rect);
-                            for hlr in highlight_rects {
-                                p.rect_filled(
-                                    hlr.translate(text_pos.to_vec2()),
-                                    0.0,
-                                    self.search_match_background,
-                                );
-                            }
-                            p.galley(text_pos, galley, visuals.text_color());
-
-                            if trailing_ellipsis {
-                                ui.painter().galley(
-                                    egui::pos2(clip_rect.max.x, text_pos.y),
-                                    label_ell.clone(),
-                                    visuals.text_color(),
-                                );
-                            }
-                        } else {
-                            for hlr in highlight_rects {
-                                ui.painter().rect_filled(
-                                    hlr.translate(text_pos.to_vec2()),
-                                    0.0,
-                                    self.search_match_background,
-                                );
-                            }
-                            ui.painter().galley(text_pos, galley, visuals.text_color());
-                        }
+                        let highlight = state.highlights.and_then(|hls| hls.labels.get(i));
+                        self.paint_text(
+                            ui,
+                            text_pos,
+                            galley,
+                            highlight,
+                            text_width,
+                            &label_ellipsis,
+                        );
                     }
 
                     if let Some(galley) = img_src_galley {
                         let text_pos = Pos2::new(cursor_x, cursor_y);
+                        let galley_height = galley.size().y;
+                        let highlight =
+                            state.highlights.and_then(|hls| hls.preview_source.as_ref());
+                        let displayed_text_rect = self.paint_text(
+                            ui,
+                            text_pos,
+                            galley,
+                            highlight,
+                            text_width,
+                            &label_ellipsis,
+                        );
+
+                        // Drawing text underline manually with offset to workaround https://github.com/emilk/egui/issues/5855
                         let text_underline = Stroke {
                             width: 1.0,
                             color: visuals.text_color(),
                         };
-
-                        // Drawing text underline manually with offset to workaround https://github.com/emilk/egui/issues/5855
-                        let underline_y = text_pos.y + galley.size().y - text_underline.width
+                        let underline_y = text_pos.y + galley_height - text_underline.width
                             + self.underline_offset;
                         ui.painter().line_segment(
                             [
                                 Pos2::new(text_pos.x, underline_y),
-                                Pos2::new(text_pos.x + galley.size().x, underline_y),
+                                Pos2::new(text_pos.x + displayed_text_rect.width(), underline_y),
                             ],
                             text_underline,
                         );
-                        ui.painter().galley(text_pos, galley, visuals.text_color());
                     }
 
                     if let Some(galley) = sublabel_galley {
                         let text_pos =
                             Pos2::new(cursor_x, rect.shrink2(padding).bottom() - galley.size().y);
-                        ui.painter().galley(text_pos, galley, visuals.text_color());
+                        let highlight = state.highlights.and_then(|hls| hls.sublabel.as_ref());
+                        self.paint_text(
+                            ui,
+                            text_pos,
+                            galley,
+                            highlight,
+                            text_width,
+                            &sublabel_ellipsis,
+                        );
                     }
 
                     if let Some(galley) = keyboard_hint_galley {
@@ -614,116 +481,358 @@ impl ClipboardButton {
         .response
     }
 
-    // TODO: build other texts than just the first label
+    fn paint_text(
+        &self,
+        ui: &Ui,
+        text_pos: Pos2,
+        galley: Arc<Galley>,
+        highlight: Option<&ClipboardButtonHighlight>,
+        text_width: f32,
+        ellipsis: &Arc<Galley>,
+    ) -> Rect {
+        let visuals = &ui.style().visuals.widgets.inactive;
+        let fallback_text_color = visuals.text_color();
+        let painter = ui.painter();
+
+        let mut galley = galley;
+        let mut highlight_rects = vec![];
+        let mut override_layout = None;
+
+        if let Some(highlight) = highlight {
+            if let Some(override_text) = &highlight.override_text {
+                let (override_galley, prepared_override) =
+                    prepare_override(ui, override_text, text_width, ellipsis.size().x);
+                galley = override_galley;
+                override_layout = Some(prepared_override);
+            }
+
+            highlight_rects = build_highlight_rects(&galley, &highlight.highlight);
+        }
+
+        let Some(override_layout) = override_layout else {
+            for rect in highlight_rects {
+                painter.rect_filled(
+                    rect.translate(text_pos.to_vec2()),
+                    0.0,
+                    self.search_match_background,
+                );
+            }
+
+            let rendered_rect = Rect::from_min_size(text_pos, galley.size());
+            painter.galley(text_pos, galley, fallback_text_color);
+            return rendered_rect;
+        };
+
+        let rendered_rect =
+            Rect::from_min_size(text_pos, egui::vec2(override_layout.width, galley.size().y));
+        let mut text_pos = text_pos;
+        if override_layout.leading_ellipsis {
+            painter.galley(text_pos, Arc::clone(ellipsis), fallback_text_color);
+            text_pos.x += ellipsis.size().x;
+        }
+
+        let clip_rect = Rect::from_min_size(
+            text_pos + egui::vec2(override_layout.clip_pad_left, 0.0),
+            egui::vec2(
+                override_layout.clip_width
+                    - override_layout.clip_pad_left
+                    - override_layout.clip_pad_right,
+                galley.size().y,
+            ),
+        );
+        text_pos.x -= galley.rows[0].row.glyphs[override_layout.start_glyph_idx]
+            .pos
+            .x;
+
+        let clipped = painter.with_clip_rect(clip_rect);
+        for rect in highlight_rects {
+            clipped.rect_filled(
+                rect.translate(text_pos.to_vec2()),
+                0.0,
+                self.search_match_background,
+            );
+        }
+        clipped.galley(text_pos, galley, fallback_text_color);
+
+        if override_layout.trailing_ellipsis {
+            painter.galley(
+                egui::pos2(clip_rect.max.x + override_layout.clip_pad_right, text_pos.y),
+                Arc::clone(ellipsis),
+                fallback_text_color,
+            );
+        }
+
+        rendered_rect
+    }
+
     pub fn build_highlight(
         &self,
         texts_with_highlights: ClipboardButtonTexts<(&str, &[u32])>,
     ) -> ClipboardButtonTexts<ClipboardButtonHighlight> {
-        if texts_with_highlights.labels.is_empty() || self.rendered_lengths_cache.labels.is_empty()
-        {
-            return ClipboardButtonTexts {
-                labels: vec![],
-                sublabel: None,
-                preview_source: None,
-            };
+        let rendered_lengths = &self.rendered_lengths_cache;
+        ClipboardButtonTexts {
+            labels: texts_with_highlights
+                .labels
+                .iter()
+                .zip(&rendered_lengths.labels)
+                .map(|(&(text, matched), &rendered_len)| {
+                    self.build_text_highlight(text, matched, rendered_len, self.label_style())
+                })
+                .collect(),
+            sublabel: texts_with_highlights
+                .sublabel
+                .zip(rendered_lengths.sublabel)
+                .map(|((text, matched), rendered_len)| {
+                    self.build_text_highlight(text, matched, rendered_len, self.sublabel_style())
+                }),
+            preview_source: texts_with_highlights
+                .preview_source
+                .zip(rendered_lengths.preview_source)
+                .map(|((text, matched), rendered_len)| {
+                    self.build_text_highlight(text, matched, rendered_len, self.label_style())
+                }),
+        }
+    }
+
+    fn build_text_highlight(
+        &self,
+        text: &str,
+        matched: &[u32],
+        rendered_len: usize,
+        style: TextFormat,
+    ) -> ClipboardButtonHighlight {
+        if matched.is_empty() {
+            return ClipboardButtonHighlight::default();
         }
 
-        let (plain, m) = texts_with_highlights.labels[0];
-        let rendered_len = self.rendered_lengths_cache.labels[0];
-        let default_text_format = self.label_style();
-
-        if m.is_empty() {
-            return ClipboardButtonTexts {
-                labels: vec![],
-                sublabel: None,
-                preview_source: None,
-            };
-        }
-
-        let leading_ws_byte_end = plain
-            .chars()
-            .take_while(|c| c.is_ascii_whitespace())
-            .count();
-        let trailing_ws_byte_start = plain.len()
-            - plain
-                .chars()
-                .rev()
-                .take_while(|c| c.is_ascii_whitespace())
-                .count();
-
-        let mut match_iter = m.iter().peekable();
-        let mut highlight: Vec<Range<usize>> = vec![];
-        let mut override_text = None;
-
+        let (leading_ws_byte_end, trailing_ws_byte_start) = text_whitespace_bounds(text);
+        let mut hl_tracker = HighlightTracker::new(matched, 0);
         let mut needs_override_text = true;
-        let mut last_display_char_idx = 0;
-        let mut display_char_idx = 0;
-        let mut highlight_start_char_idx = None;
-        for (i, (s, c, bi, _)) in
-            iter_char_to_display_text(plain, leading_ws_byte_end, trailing_ws_byte_start)
-                .enumerate()
+        let mut text_processed_fully = true;
+        for (i, (display, c, byte_idx, _)) in
+            iter_char_to_display_text(text, leading_ws_byte_end, trailing_ws_byte_start).enumerate()
         {
-            let mut highlighted = false;
-            while let Some(&&matched_byte) = match_iter.peek()
-                && (bi..bi + c.len_utf8()).contains(&(matched_byte as usize))
-            {
-                highlighted = true;
-                match_iter.next();
-            }
-
-            let prev_highlighted = highlight_start_char_idx.is_some();
-            if highlighted != prev_highlighted {
-                if highlighted {
-                    highlight_start_char_idx = Some(display_char_idx);
-                } else {
-                    highlight.push((highlight_start_char_idx.unwrap()..display_char_idx).into());
-                    highlight_start_char_idx = None;
-                }
-            }
-
-            // A highlighted group can be rendered fully
-            if prev_highlighted && !highlighted {
+            let was_highlighted = hl_tracker.start_char_idx.is_some();
+            let highlighted = hl_tracker.track(c, byte_idx);
+            if was_highlighted && !highlighted {
+                // A highlighted group can be rendered fully
                 needs_override_text = false;
             }
 
-            if i > DISPLAY_LIMIT {
+            if i > DISPLAY_LIMIT || hl_tracker.display_len == rendered_len {
+                text_processed_fully = false;
                 break;
             }
-
-            if display_char_idx == rendered_len {
-                break;
-            }
-
-            display_char_idx += s.chars().count();
-            last_display_char_idx = display_char_idx;
+            hl_tracker.advance(display);
         }
 
-        if let Some(start_idx) = highlight_start_char_idx {
-            highlight.push((start_idx..last_display_char_idx + 1).into());
+        if text_processed_fully {
+            needs_override_text = false;
         }
 
         if needs_override_text {
-            let (hl, ot) = build_override_text_with_highlight(
-                plain,
-                m,
-                default_text_format,
+            let (highlight, override_text) = build_override_text_with_highlight(
+                text,
+                matched,
+                style,
                 self.muted_color,
                 leading_ws_byte_end,
                 trailing_ws_byte_start,
             );
-            highlight = hl;
-            override_text = Some(ot);
-        }
-
-        ClipboardButtonTexts {
-            labels: vec![ClipboardButtonHighlight {
+            ClipboardButtonHighlight {
                 highlight,
-                override_text,
-            }],
-            sublabel: None,
-            preview_source: None,
+                override_text: Some(override_text),
+            }
+        } else {
+            ClipboardButtonHighlight {
+                highlight: hl_tracker.finish(),
+                override_text: None,
+            }
         }
     }
+}
+
+fn build_layout_job(text: &str, default_text_format: TextFormat, muted_fg: Color32) -> LayoutJob {
+    let mut job_builder = LayoutJobBuilder::new(default_text_format, muted_fg);
+    if text.is_empty() {
+        return job_builder.finish();
+    }
+
+    let (leading_ws_byte_end, trailing_ws_byte_start) = text_whitespace_bounds(text);
+    for (char_idx, (display, _, _, muted)) in
+        iter_char_to_display_text(text, leading_ws_byte_end, trailing_ws_byte_start).enumerate()
+    {
+        // Very very long string causes egui to choke on first render,
+        // even when we only display it on a single line with small width
+        if char_idx > DISPLAY_LIMIT {
+            // TODO: use the has_trailing mechanic just like OverrideText instead of this (aka doing
+            // this in ui() for consistency)
+            job_builder.push("…", true);
+            return job_builder.finish();
+        }
+
+        job_builder.push(display, muted);
+    }
+
+    job_builder.finish()
+}
+
+fn prepare_override(
+    ui: &Ui,
+    override_text: &OverrideText,
+    text_width: f32,
+    ellipsis_width: f32,
+) -> (Arc<Galley>, PreparedOverride) {
+    let galley = override_text.text.clone().into_galley(
+        ui,
+        Some(TextWrapMode::Extend),
+        f32::INFINITY,
+        TextStyle::Button,
+    );
+
+    let row = &galley.rows[0].row;
+    let mut start_glyph_idx = override_text.start_glyph_idx;
+    let mut render_to_end_width = row.size.x - row.glyphs[start_glyph_idx].pos.x;
+
+    let leading_ellipsis = override_text.has_leading || override_text.start_glyph_idx > 0;
+    let leading_ellipsis_width = if leading_ellipsis {
+        ellipsis_width
+    } else {
+        0.0
+    };
+    let trailing_ellipsis =
+        override_text.has_trailing || render_to_end_width > text_width - leading_ellipsis_width;
+    let trailing_ellipsis_width = if trailing_ellipsis {
+        ellipsis_width
+    } else {
+        0.0
+    };
+
+    // If the highlight-focused galley has empty space at the end,
+    // scroll glyphs before the start glyph in to fill it
+    let renderable_width = text_width - leading_ellipsis_width - trailing_ellipsis_width;
+    loop {
+        if start_glyph_idx == 0 {
+            break;
+        }
+
+        render_to_end_width +=
+            row.glyphs[start_glyph_idx].pos.x - row.glyphs[start_glyph_idx - 1].pos.x;
+        if render_to_end_width > renderable_width {
+            break;
+        }
+
+        start_glyph_idx -= 1;
+    }
+
+    // Hide overhangs of the last start unrendered glyph and the first end unrendered glyph
+    let clip_pad_left = if start_glyph_idx > 0 {
+        let start_glyph = row.glyphs[start_glyph_idx];
+        let last_start_unrendered_glyph = row.glyphs[start_glyph_idx - 1];
+
+        let glyph_width = start_glyph.pos.x - last_start_unrendered_glyph.pos.x;
+        let uv_width = last_start_unrendered_glyph.uv_rect.offset.x
+            + last_start_unrendered_glyph.uv_rect.size.x;
+        (uv_width - glyph_width).max(0.0)
+    } else {
+        0.0
+    };
+    let mut clip_pad_right = 0.0;
+
+    let (clip_width, width) = if trailing_ellipsis {
+        // Snap the clip width to the last fully visible glyph
+        let mut total_render_glyph_width = 0.0;
+        let mut prev_glyph_idx = start_glyph_idx;
+        for i in start_glyph_idx + 1..row.glyphs.len() + 1 {
+            let glyph_x_max = if i < row.glyphs.len() {
+                row.glyphs[i].pos.x
+            } else {
+                row.size.x
+            };
+            let new_total_width =
+                total_render_glyph_width + glyph_x_max - row.glyphs[prev_glyph_idx].pos.x;
+            if new_total_width > renderable_width {
+                break;
+            }
+
+            total_render_glyph_width = new_total_width;
+            prev_glyph_idx = i;
+        }
+
+        let end_glyph_idx = prev_glyph_idx - 1;
+        if end_glyph_idx > 0 && end_glyph_idx < row.glyphs.len() - 1 {
+            let first_end_unrendered_glyph = row.glyphs[end_glyph_idx + 1];
+            let glyph_x_max = if end_glyph_idx < row.glyphs.len() - 2 {
+                row.glyphs[end_glyph_idx + 2].pos.x
+            } else {
+                row.size.x
+            };
+
+            let glyph_width = glyph_x_max - first_end_unrendered_glyph.pos.x;
+            let uv_width = first_end_unrendered_glyph.uv_rect.offset.x
+                + first_end_unrendered_glyph.uv_rect.size.x;
+            clip_pad_right = (uv_width - glyph_width).max(0.0);
+        }
+
+        (
+            total_render_glyph_width,
+            leading_ellipsis_width + total_render_glyph_width + trailing_ellipsis_width,
+        )
+    } else {
+        let content_width = row.size.x - row.glyphs[start_glyph_idx].pos.x;
+        (renderable_width, leading_ellipsis_width + content_width)
+    };
+
+    (
+        galley,
+        PreparedOverride {
+            start_glyph_idx,
+            leading_ellipsis,
+            trailing_ellipsis,
+            clip_width,
+            clip_pad_left,
+            clip_pad_right,
+            width,
+        },
+    )
+}
+
+fn build_highlight_rects(galley: &Galley, highlight: &[Range<usize>]) -> Vec<Rect> {
+    // LayoutJob's TextFormat's `background` only highlights each section separatedly,
+    // and each section can have different height and position
+    let placed_row = &galley.rows[0];
+    let row = &placed_row.row;
+    let row_top = placed_row.pos.y;
+    let row_bottom = row_top + row.size.y;
+
+    let (elide_len, elide_pos) = if galley.elided && galley.job.wrap.overflow_character.is_some() {
+        (1, row.glyphs.last().map(|g| g.pos.x))
+    } else {
+        (0, None)
+    };
+    let glyph_len = row.glyphs.len() - elide_len;
+
+    let mut rects = Vec::with_capacity(highlight.len());
+    for &Range { start, end } in highlight {
+        if start >= glyph_len {
+            break;
+        }
+        let end = end.min(glyph_len);
+
+        let x_min = placed_row.pos.x + row.glyphs[start].pos.x;
+        let x_max = if end < glyph_len {
+            placed_row.pos.x + row.glyphs[end].pos.x
+        } else {
+            placed_row.pos.x + elide_pos.unwrap_or(row.size.x)
+        };
+
+        rects.push(Rect::from_min_max(
+            egui::pos2(x_min, row_top),
+            egui::pos2(x_max, row_bottom),
+        ));
+    }
+
+    rects
 }
 
 fn build_override_text_with_highlight(
@@ -734,89 +843,27 @@ fn build_override_text_with_highlight(
     leading_ws_byte_end: usize,
     trailing_ws_byte_start: usize,
 ) -> (Vec<Range<usize>>, OverrideText) {
-    let mut job = LayoutJob::default();
-    let mut highlights = vec![];
-
-    if text.is_empty() {
-        return (
-            highlights,
-            OverrideText {
-                text: job.into(),
-                start_glyph_idx: 0,
-                has_leading: false,
-                has_trailing: false,
-            },
-        );
-    }
-
-    let first_match_byte_idx = r#match[0];
-    let (substr, start, end, display_start) =
-        get_override_substr(text, first_match_byte_idx as usize);
+    let (substr, start, end, display_start) = get_override_substr(text, r#match[0] as usize);
     let has_leading = start > 0;
     let has_trailing = end < text.len();
 
     let leading_ws_byte_end = leading_ws_byte_end.saturating_sub(start).min(end);
     let trailing_ws_byte_start = trailing_ws_byte_start.saturating_sub(start).min(end);
 
-    let mut match_iter = r#match.iter().peekable();
-    let mut part_text = String::new();
-    let mut last_display_char_idx = 0;
-    let mut display_char_idx = 0;
-    let mut prev_muted = false;
-    let mut highlight_start_char_idx = None;
-    for (ds, c, bi, is_display_ws) in
+    let mut job_builder = LayoutJobBuilder::new(default_text_format, muted_fg);
+    let mut hl_tracker = HighlightTracker::new(r#match, start);
+    for (display, c, byte_idx, muted) in
         iter_char_to_display_text(substr, leading_ws_byte_end, trailing_ws_byte_start)
     {
-        let mut highlighted = false;
-        while let Some(&&matched_byte) = match_iter.peek()
-            && (bi..bi + c.len_utf8()).contains(&(matched_byte as usize))
-        {
-            highlighted = true;
-            match_iter.next();
-        }
-
-        let prev_highlighted = highlight_start_char_idx.is_some();
-        if highlighted != prev_highlighted {
-            if highlighted {
-                highlight_start_char_idx = Some(display_char_idx);
-            } else {
-                highlights.push((highlight_start_char_idx.unwrap()..display_char_idx).into());
-                highlight_start_char_idx = None;
-            }
-        }
-
-        let muted = is_display_ws;
-        if muted != prev_muted && !part_text.is_empty() {
-            let mut tf = default_text_format.clone();
-            if prev_muted {
-                tf.color = muted_fg;
-            }
-            job.append(&mem::take(&mut part_text), 0.0, tf);
-        }
-
-        part_text.push_str(ds);
-
-        display_char_idx += ds.chars().count();
-        last_display_char_idx = display_char_idx;
-        prev_muted = muted;
-    }
-
-    if !part_text.is_empty() {
-        let mut tf = default_text_format.clone();
-        if prev_muted {
-            tf.color = muted_fg;
-        }
-        job.append(&mem::take(&mut part_text), 0.0, tf);
-    }
-
-    if let Some(start_idx) = highlight_start_char_idx {
-        highlights.push((start_idx..last_display_char_idx + 1).into());
+        hl_tracker.track(c, byte_idx);
+        job_builder.push(display, muted);
+        hl_tracker.advance(display);
     }
 
     (
-        highlights,
+        hl_tracker.finish(),
         OverrideText {
-            text: job.into(),
+            text: job_builder.finish().into(),
             start_glyph_idx: display_start,
             has_leading,
             has_trailing,
@@ -831,14 +878,11 @@ fn get_override_substr(s: &str, idx: usize) -> (&str, usize, usize, usize) {
     }
 
     for _ in 0..SEARCH_MATCH_CONTEXT_LIMIT {
-        if start == 0 {
+        if let Some(cb) = prev_char_boundary(s, start) {
+            start = cb;
+        } else {
             break;
-        }
-
-        start -= 1;
-        while !s.is_char_boundary(start) {
-            start -= 1;
-        }
+        };
     }
 
     let tail = &s[start..];
@@ -858,14 +902,12 @@ fn get_override_substr(s: &str, idx: usize) -> (&str, usize, usize, usize) {
         let mut display_start = 0;
         let end = start + end;
         while count < DISPLAY_LIMIT {
-            if start == 0 {
+            if let Some(cb) = prev_char_boundary(s, start) {
+                start = cb;
+            } else {
                 break;
-            }
+            };
 
-            start -= 1;
-            while !s.is_char_boundary(start) {
-                start -= 1;
-            }
             count += 1;
             display_start += 1;
         }
@@ -900,82 +942,6 @@ fn iter_char_to_display_text(
     )
 }
 
-fn build_layout_job(text: &str, default_text_format: TextFormat, muted_fg: Color32) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    if text.is_empty() {
-        return job;
-    }
-
-    let trailing_ws_byte_start = text.len()
-        - text
-            .chars()
-            .rev()
-            .take_while(|c| c.is_ascii_whitespace())
-            .count();
-
-    let mut part_text = String::new();
-    let mut byte_idx = 0;
-    let mut prev_muted = false;
-    let mut is_leading_ws = true;
-    for (char_idx, c) in text.chars().enumerate() {
-        // Very very long string causes egui to choke on first render,
-        // even when we only display it on a single line with small width
-        if char_idx > DISPLAY_LIMIT {
-            if !part_text.is_empty() {
-                let mut tf = default_text_format.clone();
-                if prev_muted {
-                    tf.color = muted_fg;
-                }
-                job.append(&mem::take(&mut part_text), 0.0, tf);
-            }
-
-            // TODO: use the has_trailing mechanic just like OverrideText instead of this (aka doing
-            // this in ui() for consistency)
-            let mut tf = default_text_format.clone();
-            tf.color = muted_fg;
-            job.append("…", 0.0, tf);
-
-            return job;
-        }
-
-        if is_leading_ws && !c.is_ascii_whitespace() {
-            is_leading_ws = false;
-        }
-
-        let char_byte_len = c.len_utf8();
-        let is_trailing_ws = byte_idx >= trailing_ws_byte_start;
-        let display_ws = to_display_whitespace(c, is_leading_ws || is_trailing_ws);
-        let muted = display_ws.is_some();
-
-        if muted != prev_muted && !part_text.is_empty() {
-            let mut tf = default_text_format.clone();
-            if prev_muted {
-                tf.color = muted_fg;
-            }
-            job.append(&mem::take(&mut part_text), 0.0, tf);
-        }
-
-        if let Some(ws) = display_ws {
-            part_text.push_str(ws);
-        } else {
-            part_text.push(c);
-        }
-
-        prev_muted = muted;
-        byte_idx += char_byte_len;
-    }
-
-    if !part_text.is_empty() {
-        let mut tf = default_text_format.clone();
-        if prev_muted {
-            tf.color = muted_fg;
-        }
-        job.append(&mem::take(&mut part_text), 0.0, tf);
-    }
-
-    job
-}
-
 fn to_display_whitespace(c: char, convert_space: bool) -> Option<&'static str> {
     Some(match c {
         ' ' if convert_space => "·",
@@ -986,6 +952,137 @@ fn to_display_whitespace(c: char, convert_space: bool) -> Option<&'static str> {
         '\x0B' => "␋",
         _ => return None,
     })
+}
+
+fn text_whitespace_bounds(text: &str) -> (usize, usize) {
+    let leading_ws_byte_end = text.chars().take_while(|c| c.is_ascii_whitespace()).count();
+    let trailing_ws_byte_start = text.len()
+        - text
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_whitespace())
+            .count();
+    (leading_ws_byte_end, trailing_ws_byte_start)
+}
+
+fn prev_char_boundary(s: &str, mut idx: usize) -> Option<usize> {
+    loop {
+        if idx == 0 {
+            return None;
+        }
+
+        idx -= 1;
+        if s.is_char_boundary(idx) {
+            return Some(idx);
+        }
+    }
+}
+
+struct HighlightTracker<'a> {
+    matched: Peekable<Iter<'a, u32>>,
+    byte_origin: usize,
+    highlights: Vec<Range<usize>>,
+    start_char_idx: Option<usize>,
+    display_len: usize,
+}
+
+impl<'a> HighlightTracker<'a> {
+    fn new(matched: &'a [u32], byte_origin: usize) -> Self {
+        Self {
+            matched: matched.iter().peekable(),
+            byte_origin,
+            highlights: vec![],
+            start_char_idx: None,
+            display_len: 0,
+        }
+    }
+
+    fn track(&mut self, c: char, byte_idx: usize) -> bool {
+        let start = byte_idx + self.byte_origin;
+        let end = start + c.len_utf8();
+        let mut highlighted = false;
+        while let Some(&&matched_byte) = self.matched.peek()
+            && (start..end).contains(&(matched_byte as usize))
+        {
+            highlighted = true;
+            self.matched.next();
+        }
+
+        if highlighted != self.start_char_idx.is_some() {
+            if highlighted {
+                self.start_char_idx = Some(self.display_len);
+            } else {
+                self.highlights
+                    .push((self.start_char_idx.take().unwrap()..self.display_len).into());
+            }
+        }
+
+        highlighted
+    }
+
+    fn advance(&mut self, display: &str) {
+        self.display_len += display.chars().count();
+    }
+
+    fn finish(mut self) -> Vec<Range<usize>> {
+        if let Some(start_idx) = self.start_char_idx.take() {
+            self.highlights.push((start_idx..self.display_len).into());
+        }
+        self.highlights
+    }
+}
+
+struct LayoutJobBuilder {
+    job: LayoutJob,
+    run: String,
+    prev_muted: bool,
+    default_text_format: TextFormat,
+    muted_fg: Color32,
+}
+
+impl LayoutJobBuilder {
+    fn new(default_text_format: TextFormat, muted_fg: Color32) -> Self {
+        Self {
+            job: LayoutJob::default(),
+            run: String::new(),
+            prev_muted: false,
+            default_text_format,
+            muted_fg,
+        }
+    }
+
+    fn push(&mut self, display: &str, muted: bool) {
+        if muted != self.prev_muted && !self.run.is_empty() {
+            self.flush_run();
+        }
+        self.run.push_str(display);
+        self.prev_muted = muted;
+    }
+
+    fn finish(mut self) -> LayoutJob {
+        if !self.run.is_empty() {
+            self.flush_run();
+        }
+        self.job
+    }
+
+    fn flush_run(&mut self) {
+        let mut format = self.default_text_format.clone();
+        if self.prev_muted {
+            format.color = self.muted_fg;
+        }
+        self.job.append(&mem::take(&mut self.run), 0.0, format);
+    }
+}
+
+struct PreparedOverride {
+    start_glyph_idx: usize,
+    leading_ellipsis: bool,
+    trailing_ellipsis: bool,
+    clip_width: f32,
+    clip_pad_left: f32,
+    clip_pad_right: f32,
+    width: f32,
 }
 
 #[derive(Default)]
@@ -1025,11 +1122,13 @@ impl<'a> ClipboardButtonState<'a> {
     }
 }
 
+#[derive(Debug, Default)]
 pub struct ClipboardButtonHighlight {
     highlight: Vec<Range<usize>>,
     override_text: Option<OverrideText>,
 }
 
+#[derive(Debug)]
 struct OverrideText {
     text: WidgetText,
     start_glyph_idx: usize,
@@ -1037,6 +1136,7 @@ struct OverrideText {
     has_trailing: bool,
 }
 
+#[derive(Debug)]
 pub struct ClipboardButtonTexts<T> {
     pub labels: Vec<T>,
     pub sublabel: Option<T>,
