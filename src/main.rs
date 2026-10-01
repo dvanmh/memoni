@@ -649,6 +649,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
 
             if let Some(id) = paste_item_id {
                 selection.paste(id, window.win_opened_pointer.get(), paste_modifier)?;
+                persistence.save_selection_data(&selection.items, &selection.metadata)?;
             }
 
             if mode == AppMode::Search && search.query_changed() {
