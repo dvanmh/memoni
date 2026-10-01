@@ -12,8 +12,8 @@ const SEARCH_MATCH_CONTEXT_LIMIT: usize = 12;
 #[derive(Default)]
 pub struct ClipboardButton {
     pub id: u64,
-    pub texts: ClipboardButtonTexts<WidgetText>,
     pub preview: Option<(TextureHandle, Vec2)>,
+    texts: ClipboardButtonTexts<DisplayText>,
 
     preview_background: Color32,
     with_preview_padding: Option<Vec2>,
@@ -35,7 +35,7 @@ pub struct ClipboardButton {
     color_preview_corner_radius: u8,
     color_preview_background: Option<TextureHandle>,
 
-    rendered_lengths_cache: ClipboardButtonTexts<usize>,
+    text_truncation_cache: ClipboardButtonTexts<Truncation>,
 }
 
 impl ClipboardButton {
@@ -47,16 +47,21 @@ impl ClipboardButton {
 
     #[inline]
     pub fn label(mut self, label: &str) -> Self {
-        self.texts.labels =
-            vec![build_layout_job(label, self.label_style(), self.muted_color).into()];
+        self.texts.labels = vec![build_display_text(
+            label,
+            self.label_style(),
+            self.muted_color,
+        )];
         self
     }
 
     #[inline]
     pub fn append_label(mut self, label: &str) -> Self {
-        self.texts
-            .labels
-            .push(build_layout_job(label, self.label_style(), self.muted_color).into());
+        self.texts.labels.push(build_display_text(
+            label,
+            self.label_style(),
+            self.muted_color,
+        ));
         self
     }
 
@@ -64,14 +69,17 @@ impl ClipboardButton {
     pub fn muted_label(mut self, label: &str) -> Self {
         let mut style = self.label_style();
         style.color = self.muted_color;
-        self.texts.labels = vec![build_layout_job(label, style, self.muted_color).into()];
+        self.texts.labels = vec![build_display_text(label, style, self.muted_color)];
         self
     }
 
     #[inline]
     pub fn sublabel(mut self, sublabel: &str) -> Self {
-        self.texts.sublabel =
-            Some(build_layout_job(sublabel, self.sublabel_style(), self.muted_color).into());
+        self.texts.sublabel = Some(build_display_text(
+            sublabel,
+            self.sublabel_style(),
+            self.muted_color,
+        ));
         self
     }
 
@@ -83,8 +91,11 @@ impl ClipboardButton {
 
     #[inline]
     pub fn preview_source(mut self, preview_source: &str) -> Self {
-        self.texts.preview_source =
-            Some(build_layout_job(preview_source, self.label_style(), self.muted_color).into());
+        self.texts.preview_source = Some(build_display_text(
+            preview_source,
+            self.label_style(),
+            self.muted_color,
+        ));
         self
     }
 
@@ -254,33 +265,44 @@ impl ClipboardButton {
                     .map(|g| g.size().x + keyboard_hint_gap)
                     .unwrap_or(0.0);
 
+                let label_ellipsis = Arc::new(ui.painter().layout_no_wrap(
+                    "…".into(),
+                    FontId::proportional(self.label_size),
+                    self.muted_color,
+                ));
+                let sublabel_ellipsis = Arc::new(ui.painter().layout_no_wrap(
+                    "…".into(),
+                    FontId::proportional(self.sublabel_size),
+                    self.muted_color,
+                ));
+
                 let label_galleys = self
                     .texts
                     .labels
                     .iter()
-                    .map(|l| {
-                        l.clone().into_galley(
+                    .map(|t| {
+                        t.text.clone().into_galley(
                             ui,
-                            Some(TextWrapMode::Truncate),
-                            text_width,
+                            Some(TextWrapMode::Extend),
+                            f32::INFINITY,
                             TextStyle::Button,
                         )
                     })
                     .collect::<Vec<_>>();
-                let sublabel_galley = self.texts.sublabel.clone().map(|sl| {
-                    sl.into_galley(
+                let sublabel_galley = self.texts.sublabel.as_ref().map(|t| {
+                    t.text.clone().into_galley(
                         ui,
-                        Some(TextWrapMode::Truncate),
-                        text_width,
+                        Some(TextWrapMode::Extend),
+                        f32::INFINITY,
                         TextStyle::Button,
                     )
                 });
                 let img_src_galley = if self.preview.is_some() {
-                    self.texts.preview_source.clone().map(|s| {
-                        s.into_galley(
+                    self.texts.preview_source.as_ref().map(|t| {
+                        t.text.clone().into_galley(
                             ui,
-                            Some(TextWrapMode::Truncate),
-                            text_width,
+                            Some(TextWrapMode::Extend),
+                            f32::INFINITY,
                             TextStyle::Button,
                         )
                     })
@@ -289,19 +311,20 @@ impl ClipboardButton {
                 };
 
                 if state.highlights.is_none() {
-                    let rendered_glyph_len =
-                        |g: &Galley| g.rows[0].row.glyphs.len() - if g.elided { 1 } else { 0 };
-
-                    self.rendered_lengths_cache.labels.clear();
+                    self.text_truncation_cache.labels.clear();
                     for galley in &label_galleys {
-                        self.rendered_lengths_cache
-                            .labels
-                            .push(rendered_glyph_len(galley));
+                        self.text_truncation_cache.labels.push(measure_truncation(
+                            galley,
+                            text_width,
+                            label_ellipsis.size().x,
+                        ));
                     }
-                    self.rendered_lengths_cache.sublabel =
-                        sublabel_galley.as_deref().map(rendered_glyph_len);
-                    self.rendered_lengths_cache.preview_source =
-                        img_src_galley.as_deref().map(rendered_glyph_len);
+                    self.text_truncation_cache.sublabel = sublabel_galley
+                        .as_deref()
+                        .map(|g| measure_truncation(g, text_width, sublabel_ellipsis.size().x));
+                    self.text_truncation_cache.preview_source = img_src_galley
+                        .as_deref()
+                        .map(|g| measure_truncation(g, text_width, label_ellipsis.size().x));
                 }
 
                 let text_height = label_galleys.iter().fold(0.0, |acc, g| acc + g.size().y)
@@ -330,17 +353,6 @@ impl ClipboardButton {
                     } else {
                         visuals.weak_bg_fill
                     };
-
-                    let label_ellipsis = ui.painter().layout_no_wrap(
-                        "…".into(),
-                        FontId::proportional(self.label_size),
-                        self.muted_color,
-                    );
-                    let sublabel_ellipsis = ui.painter().layout_no_wrap(
-                        "…".into(),
-                        FontId::proportional(self.sublabel_size),
-                        self.muted_color,
-                    );
 
                     ui.painter().rect(
                         rect,
@@ -510,16 +522,28 @@ impl ClipboardButton {
         }
 
         let Some(override_layout) = override_layout else {
+            let truncation = measure_truncation(&galley, text_width, ellipsis.size().x);
+            let rendered_rect =
+                Rect::from_min_size(text_pos, egui::vec2(truncation.width, galley.size().y));
+
+            let clipped = painter.with_clip_rect(rendered_rect);
             for rect in highlight_rects {
-                painter.rect_filled(
+                clipped.rect_filled(
                     rect.translate(text_pos.to_vec2()),
                     0.0,
                     self.search_match_background,
                 );
             }
+            clipped.galley(text_pos, galley, fallback_text_color);
 
-            let rendered_rect = Rect::from_min_size(text_pos, galley.size());
-            painter.galley(text_pos, galley, fallback_text_color);
+            if truncation.has_trailing {
+                painter.galley(
+                    Pos2::new(text_pos.x + truncation.width, text_pos.y),
+                    Arc::clone(ellipsis),
+                    fallback_text_color,
+                );
+            }
+
             return rendered_rect;
         };
 
@@ -569,27 +593,42 @@ impl ClipboardButton {
         &self,
         texts_with_highlights: ClipboardButtonTexts<(&str, &[u32])>,
     ) -> ClipboardButtonTexts<ClipboardButtonHighlight> {
-        let rendered_lengths = &self.rendered_lengths_cache;
+        let truncations = &self.text_truncation_cache;
         ClipboardButtonTexts {
             labels: texts_with_highlights
                 .labels
                 .iter()
-                .zip(&rendered_lengths.labels)
-                .map(|(&(text, matched), &rendered_len)| {
-                    self.build_text_highlight(text, matched, rendered_len, self.label_style())
+                .zip(&truncations.labels)
+                .map(|(&(text, matched), truncation)| {
+                    self.build_text_highlight(
+                        text,
+                        matched,
+                        truncation.glyph_len,
+                        self.label_style(),
+                    )
                 })
                 .collect(),
             sublabel: texts_with_highlights
                 .sublabel
-                .zip(rendered_lengths.sublabel)
-                .map(|((text, matched), rendered_len)| {
-                    self.build_text_highlight(text, matched, rendered_len, self.sublabel_style())
+                .zip(truncations.sublabel)
+                .map(|((text, matched), truncation)| {
+                    self.build_text_highlight(
+                        text,
+                        matched,
+                        truncation.glyph_len,
+                        self.sublabel_style(),
+                    )
                 }),
             preview_source: texts_with_highlights
                 .preview_source
-                .zip(rendered_lengths.preview_source)
-                .map(|((text, matched), rendered_len)| {
-                    self.build_text_highlight(text, matched, rendered_len, self.label_style())
+                .zip(truncations.preview_source)
+                .map(|((text, matched), truncation)| {
+                    self.build_text_highlight(
+                        text,
+                        matched,
+                        truncation.glyph_len,
+                        self.label_style(),
+                    )
                 }),
         }
     }
@@ -652,34 +691,65 @@ impl ClipboardButton {
     }
 }
 
-fn build_layout_job(text: &str, default_text_format: TextFormat, muted_fg: Color32) -> LayoutJob {
+fn build_display_text(
+    text: &str,
+    default_text_format: TextFormat,
+    muted_fg: Color32,
+) -> DisplayText {
     let mut job_builder = LayoutJobBuilder::new(default_text_format, muted_fg);
-    if text.is_empty() {
-        return job_builder.finish();
-    }
+    let mut has_trailing = false;
 
-    let (leading_ws_byte_end, trailing_ws_byte_start) = text_whitespace_bounds(text);
-    for (char_idx, (display, _, _, muted)) in
-        iter_char_to_display_text(text, leading_ws_byte_end, trailing_ws_byte_start).enumerate()
-    {
+    if !text.is_empty() {
         // Very very long string causes egui to choke on first render,
         // even when we only display it on a single line with small width
-        if char_idx > DISPLAY_LIMIT {
-            // TODO: use the has_trailing mechanic just like OverrideText instead of this (aka doing
-            // this in ui() for consistency)
-            job_builder.push("…", true);
-            return job_builder.finish();
-        }
+        let (leading_ws_byte_end, trailing_ws_byte_start) = text_whitespace_bounds(text);
+        for (char_idx, (display, _, _, muted)) in
+            iter_char_to_display_text(text, leading_ws_byte_end, trailing_ws_byte_start).enumerate()
+        {
+            if char_idx > DISPLAY_LIMIT {
+                has_trailing = true;
+                break;
+            }
 
-        job_builder.push(display, muted);
+            job_builder.push(display, muted);
+        }
     }
 
-    job_builder.finish()
+    DisplayText {
+        text: job_builder.finish().into(),
+        start_glyph_idx: 0,
+        has_leading: false,
+        has_trailing,
+    }
+}
+
+fn measure_truncation(galley: &Galley, text_width: f32, ellipsis_width: f32) -> Truncation {
+    let Some(placed_row) = galley.rows.first() else {
+        return Truncation {
+            glyph_len: 0,
+            has_trailing: false,
+            width: 0.0,
+        };
+    };
+    let row = &placed_row.row;
+
+    let mut glyph_len = row.glyphs.len();
+    let mut width = row.glyphs.last().map(|g| g.max_x()).unwrap_or(0.0);
+    while width > text_width - ellipsis_width && glyph_len > 0 {
+        glyph_len -= 1;
+        width -= row.glyphs[glyph_len].advance_width;
+    }
+
+    Truncation {
+        glyph_len,
+        has_trailing: glyph_len < row.glyphs.len(),
+        width,
+    }
 }
 
 fn prepare_override(
     ui: &Ui,
-    override_text: &OverrideText,
+    override_text: &DisplayText,
     text_width: f32,
     ellipsis_width: f32,
 ) -> (Arc<Galley>, PreparedOverride) {
@@ -842,7 +912,7 @@ fn build_override_text_with_highlight(
     muted_fg: Color32,
     leading_ws_byte_end: usize,
     trailing_ws_byte_start: usize,
-) -> (Vec<Range<usize>>, OverrideText) {
+) -> (Vec<Range<usize>>, DisplayText) {
     let (substr, start, end, display_start) = get_override_substr(text, r#match[0] as usize);
     let has_leading = start > 0;
     let has_trailing = end < text.len();
@@ -862,7 +932,7 @@ fn build_override_text_with_highlight(
 
     (
         hl_tracker.finish(),
-        OverrideText {
+        DisplayText {
             text: job_builder.finish().into(),
             start_glyph_idx: display_start,
             has_leading,
@@ -1085,7 +1155,14 @@ struct PreparedOverride {
     width: f32,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy)]
+struct Truncation {
+    glyph_len: usize,
+    has_trailing: bool,
+    width: f32,
+}
+
+#[derive(Debug, Default)]
 pub struct ClipboardButtonState<'a> {
     is_active: bool,
     is_pinned: bool,
@@ -1125,11 +1202,11 @@ impl<'a> ClipboardButtonState<'a> {
 #[derive(Debug, Default)]
 pub struct ClipboardButtonHighlight {
     highlight: Vec<Range<usize>>,
-    override_text: Option<OverrideText>,
+    override_text: Option<DisplayText>,
 }
 
 #[derive(Debug)]
-struct OverrideText {
+struct DisplayText {
     text: WidgetText,
     start_glyph_idx: usize,
     has_leading: bool,
