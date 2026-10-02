@@ -230,20 +230,27 @@ impl<'a> Input<'a> {
                     break 'blk Box::new(iter::empty());
                 };
 
+                let mut event_iter: Box<dyn Iterator<Item = Event>> = Box::new(iter::empty());
+
                 let mut next_modifiers = *modifiers;
                 if keysym.is_modifier_key() {
                     if keysym == Keysym::Alt_L || keysym == Keysym::Alt_R {
                         next_modifiers.alt = pressed;
-                    }
-                    if keysym == Keysym::Control_L || keysym == Keysym::Control_R {
+                    } else if keysym == Keysym::Control_L || keysym == Keysym::Control_R {
                         next_modifiers.ctrl = pressed;
-                    }
-                    if keysym == Keysym::Shift_L || keysym == Keysym::Shift_R {
+                    } else if keysym == Keysym::Shift_L || keysym == Keysym::Shift_R {
                         next_modifiers.shift = pressed;
-                    }
-                    if keysym == Keysym::Super_L || keysym == Keysym::Super_R {
+                    } else if keysym == Keysym::Super_L || keysym == Keysym::Super_R {
                         // egui has no Super slot on Linux, so repurpose the unused-on-Linux mac_cmd bit for it
                         next_modifiers.mac_cmd = pressed;
+                    } else if keysym == Keysym::Caps_Lock {
+                        trace!(
+                            "ignoring CapsLock modifier event, CapsLock state is read directly when processing other key events"
+                        );
+                        break 'blk event_iter;
+                    } else {
+                        debug!("ignoring modifier: {keysym:?}");
+                        break 'blk event_iter;
                     }
                 }
 
@@ -263,20 +270,7 @@ impl<'a> Input<'a> {
                     break 'blk Box::new(iter::empty());
                 }
 
-                let mut event_iter: Box<dyn Iterator<Item = Event>> = Box::new(iter::empty());
-
-                if keysym.is_modifier_key() {
-                    if next_modifiers == *modifiers {
-                        if keysym.raw() != xkeysym::key::Caps_Lock {
-                            debug!("ignoring modifier: {keysym:?}");
-                        } else {
-                            trace!(
-                                "ignoring CapsLock modifier event, CapsLock state is read directly when processing other key events"
-                            );
-                        }
-                        break 'blk event_iter;
-                    }
-
+                if next_modifiers != *modifiers {
                     *modifiers = next_modifiers;
                     trace!("modifiers updated: {modifiers:?}");
                     event_iter =
