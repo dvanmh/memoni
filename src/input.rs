@@ -65,10 +65,7 @@ impl<'a> Input<'a> {
                 match try_connect_xim_server(window, watch.xim_server_atom, &watch.im_name)? {
                     Some((client, owner)) => {
                         info!("found XIM server {:?}, connecting", watch.im_name);
-                        (
-                            Some(client),
-                            Some(owner),
-                        )
+                        (Some(client), Some(owner))
                     }
                     None => {
                         info!(
@@ -376,7 +373,7 @@ impl<'a> Input<'a> {
                 Ok(true)
             }
 
-            _ => Ok(false)
+            _ => Ok(false),
         }
     }
 
