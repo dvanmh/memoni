@@ -1,12 +1,9 @@
 use std::{
     collections::HashMap,
     ffi::CString,
-    fs::{self, File},
-    io::Read as _,
-    mem,
+    fs, mem,
     path::{Path, PathBuf},
     rc::Rc,
-    str::FromStr as _,
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
@@ -1503,40 +1500,11 @@ fn get_file_thumbnail<P: AsRef<Path>>(
 fn get_file_icon_path<P: AsRef<Path>>(file: P) -> Result<Option<PathBuf>> {
     static SMI: LazyLock<SharedMimeInfo> = LazyLock::new(SharedMimeInfo::new);
 
-    let file_data = read_first_n_bytes(&file, 10 * 1024 * 1024)
-        .inspect_err(|e| {
-            warn!(
-                "failed to read {:?} to determine a suitable icon, falling back to generic icon: {e}",
-                file.as_ref()
-            )
-        })
-        .ok();
-    let data_mime = file_data
-        .as_ref()
-        .and_then(|data| SMI.get_mime_type_for_data(data))
-        .map(|(mime, _)| mime);
-    let ext_mime = file_data.and_then(|_| {
-        file.as_ref()
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| SMI.get_mime_types_from_file_name(name).first().cloned())
-    });
+    let mut gb = SMI.guess_mime_type();
+    let guess = gb.path(&file).guess();
+    let mime = guess.mime_type();
 
-    let mime = if let Some(data_mime) = data_mime {
-        if let Some(ext_mime) = ext_mime
-            && SMI.mime_type_subclass(&ext_mime, &data_mime)
-        {
-            ext_mime
-        } else {
-            data_mime
-        }
-    } else if let Some(ext_mime) = ext_mime {
-        ext_mime
-    } else {
-        mime::Mime::from_str("application/x-generic")?
-    };
-
-    for icon_name in SMI.lookup_icon_names(&mime) {
+    for icon_name in SMI.lookup_icon_names(mime) {
         if let Some(icon) = freedesktop_icon::get_icon(&icon_name) {
             return Ok(Some(icon));
         }
@@ -1723,12 +1691,6 @@ fn build_display_text(s: &str, theme: &ThemeConfig) -> Vec<RichText> {
     text.push(RichText::new(trailing_whitespace_str).color(theme.muted_foreground));
 
     text
-}
-
-fn read_first_n_bytes<P: AsRef<Path>>(path: P, n: u64) -> Result<Vec<u8>> {
-    let mut buffer = Vec::new();
-    File::open(path)?.take(n).read_to_end(&mut buffer)?;
-    Ok(buffer)
 }
 
 fn constrain_scroll_bar_hovering_margin(
