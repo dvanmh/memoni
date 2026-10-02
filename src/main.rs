@@ -469,6 +469,11 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                     ui.remove_button_widgets(std::iter::once(item));
                                 }
                                 info!("selection item {active_id} removed");
+
+                                if mode == AppMode::Search {
+                                    search.remove_id(active_id);
+                                }
+
                                 persistence
                                     .save_selection_data(&selection.items, &selection.metadata)?;
                             }

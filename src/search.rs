@@ -156,6 +156,12 @@ impl Search {
             }
         }
     }
+
+    pub fn remove_id(&mut self, id: u64) {
+        if let Some(index) = self.visible_ids.iter().position(|&vid| vid == id) {
+            self.visible_ids.remove(index);
+        }
+    }
 }
 
 impl Default for Search {
