@@ -1,7 +1,4 @@
-use std::{
-    iter,
-    time::{Duration, Instant},
-};
+use std::iter;
 
 use crate::{
     utils::{is_char_key, is_letter_key, keysym_to_egui_key},
@@ -26,8 +23,6 @@ use x11rb::{
 use xim::{Client as _, ClientError};
 use xkeysym::Keysym;
 
-const XIM_CONNECTING_TIMEOUT: Duration = Duration::from_secs(3);
-
 type XimClient<'a> = xim::x11rb::X11rbClient<&'a XCBConnection>;
 
 struct XimWatch {
@@ -46,7 +41,6 @@ pub struct Input<'a> {
 
     xim_watch: Option<XimWatch>,
     xim_server_owner: Option<Window>,
-    xim_connecting_deadline: Option<Instant>,
 }
 
 impl<'a> Input<'a> {
@@ -66,7 +60,7 @@ impl<'a> Input<'a> {
             .map(|im_name| init_xim_watch(window, im_name))
             .transpose()?;
 
-        let (xim_client, xim_server_owner, xim_connecting_deadline) = match &xim_watch {
+        let (xim_client, xim_server_owner) = match &xim_watch {
             Some(watch) => {
                 match try_connect_xim_server(window, watch.xim_server_atom, &watch.im_name)? {
                     Some((client, owner)) => {
@@ -74,7 +68,6 @@ impl<'a> Input<'a> {
                         (
                             Some(client),
                             Some(owner),
-                            Some(Instant::now() + XIM_CONNECTING_TIMEOUT),
                         )
                     }
                     None => {
@@ -82,13 +75,13 @@ impl<'a> Input<'a> {
                             "no XIM server yet, waiting for {:?} to appear",
                             watch.im_name
                         );
-                        (None, None, None)
+                        (None, None)
                     }
                 }
             }
             None => {
                 info!("XMODIFIERS not set, XIM disabled");
-                (None, None, None)
+                (None, None)
             }
         };
 
@@ -102,7 +95,6 @@ impl<'a> Input<'a> {
 
             xim_watch,
             xim_server_owner,
-            xim_connecting_deadline,
         })
     }
 
@@ -111,6 +103,7 @@ impl<'a> Input<'a> {
             return Ok(());
         }
 
+        let xim_connected_before = self.xim_handler.connected;
         let handled_by_xim = match self.xim_client.as_mut() {
             Some(xim_client) => xim_client.filter_event(event, &mut self.xim_handler)?,
             None => false,
@@ -147,7 +140,7 @@ impl<'a> Input<'a> {
             }
 
             // A new connection to XIM server is fully established by this event
-            if self.xim_handler.connected && self.xim_connecting_deadline.take().is_some() {
+            if self.xim_handler.connected && !xim_connected_before {
                 if let Some(watch) = &self.xim_watch {
                     info!("connected to XIM server {:?}", watch.im_name);
                 }
@@ -383,17 +376,7 @@ impl<'a> Input<'a> {
                 Ok(true)
             }
 
-            _ => {
-                if self.xim_client.is_some()
-                    && !self.xim_handler.connected
-                    && let Some(deadline) = self.xim_connecting_deadline
-                    && Instant::now() >= deadline
-                {
-                    warn!("XIM connecting timed out, disconnecting");
-                    self.teardown_xim();
-                }
-                Ok(false)
-            }
+            _ => Ok(false)
         }
     }
 
@@ -440,13 +423,11 @@ impl<'a> Input<'a> {
 
         self.xim_client = Some(client);
         self.xim_server_owner = Some(owner);
-        self.xim_connecting_deadline = Some(Instant::now() + XIM_CONNECTING_TIMEOUT);
     }
 
     fn teardown_xim(&mut self) {
         self.xim_client = None;
         self.xim_server_owner = None;
-        self.xim_connecting_deadline = None;
         self.xim_handler = XimHandler::new(self.window.win_id.get());
 
         if let Some(watch) = &self.xim_watch {
