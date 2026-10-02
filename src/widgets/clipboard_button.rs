@@ -35,7 +35,7 @@ pub struct ClipboardButton {
     color_preview_corner_radius: u8,
     color_preview_background: Option<TextureHandle>,
 
-    text_truncation_cache: ClipboardButtonTexts<Truncation>,
+    highlight_cache: ClipboardButtonHighlightSlots,
 }
 
 impl ClipboardButton {
@@ -310,23 +310,6 @@ impl ClipboardButton {
                     None
                 };
 
-                if state.highlights.is_none() {
-                    self.text_truncation_cache.labels.clear();
-                    for galley in &label_galleys {
-                        self.text_truncation_cache.labels.push(measure_truncation(
-                            galley,
-                            text_width,
-                            label_ellipsis.size().x,
-                        ));
-                    }
-                    self.text_truncation_cache.sublabel = sublabel_galley
-                        .as_deref()
-                        .map(|g| measure_truncation(g, text_width, sublabel_ellipsis.size().x));
-                    self.text_truncation_cache.preview_source = img_src_galley
-                        .as_deref()
-                        .map(|g| measure_truncation(g, text_width, label_ellipsis.size().x));
-                }
-
                 let text_height = label_galleys.iter().fold(0.0, |acc, g| acc + g.size().y)
                     + sublabel_galley
                         .as_ref()
@@ -347,6 +330,7 @@ impl ClipboardButton {
                     ui.allocate_exact_size(Vec2::new(desired_width, desired_height), Sense::HOVER);
 
                 if ui.is_rect_visible(rect) {
+                    let matches = state.matches.as_ref();
                     let visuals = &ui.style().visuals.widgets.inactive;
                     let bg_fill = if is_active {
                         ui.style().visuals.widgets.active.weak_bg_fill
@@ -361,6 +345,13 @@ impl ClipboardButton {
                         Stroke::NONE,
                         StrokeKind::Inside,
                     );
+
+                    let label_style = self.label_style();
+                    let sublabel_style = self.sublabel_style();
+                    let mut cache = mem::take(&mut self.highlight_cache);
+                    while cache.labels.len() < self.texts.labels.len() {
+                        cache.labels.push(None);
+                    }
 
                     let mut cursor_x = rect.min.x;
                     if let Some((ref texture, size)) = self.preview {
@@ -420,29 +411,31 @@ impl ClipboardButton {
                         let text_pos = Pos2::new(cursor_x, cursor_y);
                         cursor_y += galley.size().y;
 
-                        let highlight = state.highlights.and_then(|hls| hls.labels.get(i));
+                        let matched = matches.and_then(|texts| texts.labels.get(i)).copied();
                         self.paint_text(
                             ui,
                             text_pos,
                             galley,
-                            highlight,
-                            text_width,
+                            matched,
+                            Some(&mut cache.labels[i]),
                             &label_ellipsis,
+                            label_style.clone(),
+                            text_width,
                         );
                     }
 
                     if let Some(galley) = img_src_galley {
                         let text_pos = Pos2::new(cursor_x, cursor_y);
                         let galley_height = galley.size().y;
-                        let highlight =
-                            state.highlights.and_then(|hls| hls.preview_source.as_ref());
                         let displayed_text_rect = self.paint_text(
                             ui,
                             text_pos,
                             galley,
-                            highlight,
-                            text_width,
+                            matches.and_then(|texts| texts.preview_source),
+                            cache.preview_source.as_mut(),
                             &label_ellipsis,
+                            label_style.clone(),
+                            text_width,
                         );
 
                         // Drawing text underline manually with offset to workaround https://github.com/emilk/egui/issues/5855
@@ -464,14 +457,15 @@ impl ClipboardButton {
                     if let Some(galley) = sublabel_galley {
                         let text_pos =
                             Pos2::new(cursor_x, rect.shrink2(padding).bottom() - galley.size().y);
-                        let highlight = state.highlights.and_then(|hls| hls.sublabel.as_ref());
                         self.paint_text(
                             ui,
                             text_pos,
                             galley,
-                            highlight,
-                            text_width,
+                            matches.and_then(|texts| texts.sublabel),
+                            cache.sublabel.as_mut(),
                             &sublabel_ellipsis,
+                            sublabel_style.clone(),
+                            text_width,
                         );
                     }
 
@@ -487,21 +481,44 @@ impl ClipboardButton {
                         ui.painter()
                             .circle_filled(pin_center, self.pin_size, self.pin_color);
                     }
+
+                    self.highlight_cache = cache;
                 }
             },
         )
         .response
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn paint_text(
         &self,
         ui: &Ui,
         text_pos: Pos2,
         galley: Arc<Galley>,
-        highlight: Option<&ClipboardButtonHighlight>,
-        text_width: f32,
+        matched: Option<(&str, &[u32])>,
+        mut cache_slot: Option<&mut Option<ClipboardButtonHighlight>>,
         ellipsis: &Arc<Galley>,
+        style: TextFormat,
+        text_width: f32,
     ) -> Rect {
+        let truncated = measure_truncation(&galley, text_width, ellipsis.size().x);
+        if let Some((text, matched)) = matched
+            && let Some(slot) = cache_slot.as_deref_mut()
+            && slot.is_none()
+        {
+            *slot = Self::build_text_highlight(
+                text,
+                matched,
+                truncated.glyph_len,
+                style,
+                self.muted_color,
+            );
+        }
+        let highlight = matched
+            .is_some()
+            .then(|| cache_slot.as_deref().and_then(|slot| slot.as_ref()))
+            .flatten();
+
         let visuals = &ui.style().visuals.widgets.inactive;
         let fallback_text_color = visuals.text_color();
         let painter = ui.painter();
@@ -522,9 +539,8 @@ impl ClipboardButton {
         }
 
         let Some(override_layout) = override_layout else {
-            let truncation = measure_truncation(&galley, text_width, ellipsis.size().x);
             let rendered_rect =
-                Rect::from_min_size(text_pos, egui::vec2(truncation.width, galley.size().y));
+                Rect::from_min_size(text_pos, egui::vec2(truncated.width, galley.size().y));
 
             let clipped = painter.with_clip_rect(rendered_rect);
             for rect in highlight_rects {
@@ -536,9 +552,9 @@ impl ClipboardButton {
             }
             clipped.galley(text_pos, galley, fallback_text_color);
 
-            if truncation.has_trailing {
+            if truncated.has_trailing {
                 painter.galley(
-                    Pos2::new(text_pos.x + truncation.width, text_pos.y),
+                    Pos2::new(text_pos.x + truncated.width, text_pos.y),
                     Arc::clone(ellipsis),
                     fallback_text_color,
                 );
@@ -589,59 +605,15 @@ impl ClipboardButton {
         rendered_rect
     }
 
-    pub fn build_highlight(
-        &self,
-        texts_with_highlights: ClipboardButtonTexts<(&str, &[u32])>,
-    ) -> ClipboardButtonTexts<ClipboardButtonHighlight> {
-        let truncations = &self.text_truncation_cache;
-        ClipboardButtonTexts {
-            labels: texts_with_highlights
-                .labels
-                .iter()
-                .zip(&truncations.labels)
-                .map(|(&(text, matched), truncation)| {
-                    self.build_text_highlight(
-                        text,
-                        matched,
-                        truncation.glyph_len,
-                        self.label_style(),
-                    )
-                })
-                .collect(),
-            sublabel: texts_with_highlights
-                .sublabel
-                .zip(truncations.sublabel)
-                .map(|((text, matched), truncation)| {
-                    self.build_text_highlight(
-                        text,
-                        matched,
-                        truncation.glyph_len,
-                        self.sublabel_style(),
-                    )
-                }),
-            preview_source: texts_with_highlights
-                .preview_source
-                .zip(truncations.preview_source)
-                .map(|((text, matched), truncation)| {
-                    self.build_text_highlight(
-                        text,
-                        matched,
-                        truncation.glyph_len,
-                        self.label_style(),
-                    )
-                }),
-        }
-    }
-
     fn build_text_highlight(
-        &self,
         text: &str,
         matched: &[u32],
         rendered_len: usize,
         style: TextFormat,
-    ) -> ClipboardButtonHighlight {
+        muted_fg: Color32,
+    ) -> Option<ClipboardButtonHighlight> {
         if matched.is_empty() {
-            return ClipboardButtonHighlight::default();
+            return None;
         }
 
         let (leading_ws_byte_end, trailing_ws_byte_start) = text_whitespace_bounds(text);
@@ -674,20 +646,24 @@ impl ClipboardButton {
                 text,
                 matched,
                 style,
-                self.muted_color,
+                muted_fg,
                 leading_ws_byte_end,
                 trailing_ws_byte_start,
             );
-            ClipboardButtonHighlight {
+            Some(ClipboardButtonHighlight {
                 highlight,
                 override_text: Some(override_text),
-            }
+            })
         } else {
-            ClipboardButtonHighlight {
+            Some(ClipboardButtonHighlight {
                 highlight: hl_tracker.finish(),
                 override_text: None,
-            }
+            })
         }
+    }
+
+    pub fn invalidate_highlight(&mut self) {
+        self.highlight_cache = Default::default();
     }
 }
 
@@ -1162,12 +1138,14 @@ struct Truncation {
     width: f32,
 }
 
+type ClipboardButtonHighlightSlots = ClipboardButtonTexts<Option<ClipboardButtonHighlight>>;
+
 #[derive(Debug, Default)]
 pub struct ClipboardButtonState<'a> {
     is_active: bool,
     is_pinned: bool,
     keyboard_hint: Option<&'static str>,
-    highlights: Option<&'a ClipboardButtonTexts<ClipboardButtonHighlight>>,
+    matches: Option<ClipboardButtonTexts<(&'a str, &'a [u32])>>,
 }
 
 impl<'a> ClipboardButtonState<'a> {
@@ -1190,11 +1168,8 @@ impl<'a> ClipboardButtonState<'a> {
     }
 
     #[inline]
-    pub fn highlights(
-        mut self,
-        highlights: &'a ClipboardButtonTexts<ClipboardButtonHighlight>,
-    ) -> Self {
-        self.highlights = Some(highlights);
+    pub fn matches(mut self, matches: ClipboardButtonTexts<(&'a str, &'a [u32])>) -> Self {
+        self.matches = Some(matches);
         self
     }
 }

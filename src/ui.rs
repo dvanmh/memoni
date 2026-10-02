@@ -29,14 +29,12 @@ use crate::{
     ext::RectExt as _,
     freedesktop_cache::get_cached_thumbnail,
     keymap_spec::{KeyChord, ScrollAction},
-    ordered_hash_map::{OrderedHashMap, OrderedHashMapView},
+    ordered_hash_map::OrderedHashMapView,
     search::{SearchMatch, SearchMode, SearchState},
     selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
     widgets::{
-        clipboard_button::{
-            ClipboardButton, ClipboardButtonHighlight, ClipboardButtonState, ClipboardButtonTexts,
-        },
+        clipboard_button::{ClipboardButton, ClipboardButtonState, ClipboardButtonTexts},
         help_modal::HelpModal,
     },
 };
@@ -133,7 +131,6 @@ pub struct Ui<'a> {
     config: &'a Config,
     fonts: FontDefinitions,
     button_widgets: HashMap<u64, ClipboardButton>,
-    highlights: HashMap<u64, ClipboardButtonTexts<ClipboardButtonHighlight>>,
     fallback: Fallback,
     help_modal: HelpModal,
     color_preview_background_texture: TextureHandle,
@@ -221,7 +218,6 @@ impl<'a> Ui<'a> {
             config,
             fonts,
             button_widgets: HashMap::new(),
-            highlights: HashMap::new(),
             fallback: Fallback {
                 image: fallback_img,
                 file: fallback_file,
@@ -265,7 +261,6 @@ impl<'a> Ui<'a> {
 
         debug!("clearing button widgets");
         self.button_widgets.clear();
-        self.highlights.clear();
     }
 
     fn create_egui_context(config: &Config) -> egui::Context {
@@ -349,6 +344,7 @@ impl<'a> Ui<'a> {
         flow: UiFlow,
         selection_items: &OrderedHashMapView<u64, SelectionItem>,
         scroll_actions: &[ScrollAction],
+        matches: &[SearchMatch],
         active_id: &mut u64,
         pending_keys: &mut Vec<KeyChord>,
         search_query: &mut String,
@@ -456,20 +452,23 @@ impl<'a> Ui<'a> {
                             let is_active = id == *active_id;
                             let is_pinned = item.is_pinned();
 
+                            let btn_widget = sf.button_widgets.get_mut(&item.id()).ok_or_else(
+                                || anyhow!("missing button widget for item {}", item.id()),
+                            )?;
+
                             let mut state = ClipboardButtonState::default()
                                 .is_active(is_active)
                                 .is_pinned(is_pinned);
                             if sf.config.show_quick_paste_hint && i < 10 {
                                 state = state.keyboard_hint(HINTS[i]);
                             }
-                            if mode == AppMode::Search && let Some(hls) = sf.highlights.get(&id) {
-                                state = state.highlights(hls);
+                            if mode == AppMode::Search && let Some(m) = matches.get(i) {
+                                state = state.matches(match_texts(
+                                    item,
+                                    m,
+                                    btn_widget.preview.is_some(),
+                                ));
                             }
-
-                            let btn_widget = sf
-                                .button_widgets
-                                .get_mut(&item.id())
-                                .ok_or_else(|| anyhow!("missing button widget for item {}", item.id()))?;
 
                             let btn = btn_widget.ui(ui, state);
                             sf.prev_pass
@@ -1155,12 +1154,17 @@ impl<'a> Ui<'a> {
         }
     }
 
+    pub fn invalidate_highlights(&mut self) {
+        for button in self.button_widgets.values_mut() {
+            button.invalidate_highlight();
+        }
+    }
+
     pub fn reset(&mut self) {
         info!("resetting ui states");
         self.is_initial_run = true;
         self.help_modal.hide();
         self.error_message = None;
-        self.highlights.clear();
         self.state = UiState {
             pointer_acted: false,
             pointer_pos: Pos2::ZERO,
@@ -1310,53 +1314,6 @@ impl<'a> Ui<'a> {
         Ok(())
     }
 
-    pub fn build_button_highlights(
-        &mut self,
-        items: &OrderedHashMap<u64, SelectionItem>,
-        visible_ids: &[u64],
-        matches: &[SearchMatch],
-    ) {
-        self.highlights.clear();
-
-        for (&id, m) in visible_ids.iter().zip(matches) {
-            let Some(item_texts) = items.get(&id).map(|i| i.text_data()) else {
-                warn!("missing selection item {id}");
-                continue;
-            };
-            let Some(button) = self.button_widgets.get(&id) else {
-                warn!("missing button widget for item {id}");
-                continue;
-            };
-
-            let mut texts_with_hls: ClipboardButtonTexts<(&str, &[u32])> =
-                ClipboardButtonTexts::default();
-
-            if button.preview.is_some() {
-                if let Some(ref files) = item_texts.files {
-                    texts_with_hls.labels = files
-                        .uris
-                        .iter()
-                        .zip(&m.file_uris)
-                        .map(|(t, m)| (t.display.as_ref(), m.as_slice()))
-                        .collect();
-                    texts_with_hls.sublabel = Some((&files.action, m.file_action.as_slice()));
-                } else {
-                    if let Some(ref alt) = item_texts.image_metadata.alt {
-                        texts_with_hls.labels.push((alt, m.image_alt.as_slice()));
-                    }
-                    if let Some(ref src) = item_texts.image_metadata.src {
-                        texts_with_hls.preview_source = Some((src, m.image_src.as_slice()));
-                    }
-                }
-            } else if let Some(ref plain) = item_texts.plain {
-                texts_with_hls.labels.push((plain, m.plain.as_slice()));
-            }
-
-            self.highlights
-                .insert(id, button.build_highlight(texts_with_hls));
-        }
-    }
-
     pub fn remove_button_widgets<I: IntoIterator<Item = SelectionItem>>(
         &mut self,
         removed_items: I,
@@ -1366,6 +1323,38 @@ impl<'a> Ui<'a> {
             self.button_widgets.remove(&item.id());
         }
     }
+}
+
+fn match_texts<'a>(
+    item: &'a SelectionItem,
+    m: &'a SearchMatch,
+    has_preview: bool,
+) -> ClipboardButtonTexts<(&'a str, &'a [u32])> {
+    let item_texts = item.text_data();
+    let mut texts: ClipboardButtonTexts<(&str, &[u32])> = ClipboardButtonTexts::default();
+
+    if has_preview {
+        if let Some(ref files) = item_texts.files {
+            texts.labels = files
+                .uris
+                .iter()
+                .zip(&m.file_uris)
+                .map(|(t, m)| (t.display.as_ref(), m.as_slice()))
+                .collect();
+            texts.sublabel = Some((&files.action, m.file_action.as_slice()));
+        } else {
+            if let Some(ref alt) = item_texts.image_metadata.alt {
+                texts.labels.push((alt.as_ref(), m.image_alt.as_slice()));
+            }
+            if let Some(ref src) = item_texts.image_metadata.src {
+                texts.preview_source = Some((src.as_ref(), m.image_src.as_slice()));
+            }
+        }
+    } else if let Some(ref plain) = item_texts.plain {
+        texts.labels.push((plain.as_ref(), m.plain.as_slice()));
+    }
+
+    texts
 }
 
 fn find_item_at_distance_from(
