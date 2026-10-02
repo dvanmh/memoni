@@ -762,10 +762,12 @@ impl<'a> Ui<'a> {
             forced_scroll_offset = Some(next_content_size - prev_scroll_rect.height());
         }
 
-        // Force content to be pushed down to fill the removed items' space when at the bottom of the scroll area.
-        // This allows picking the correct nearest item for the next active item.
+        // Force content to be pushed down to fill the removed items' space when scrolled to the bottom
+        // of the scroll area. This allows picking the correct nearest item for the next active item.
         let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
         if removed_item_height > 0.0 && prev_scroll_rect.height() + next_offset > next_content_size
+            // But not when items are displayed top-to-bottom without overflowing.
+            && (flow != UiFlow::TopToBottom || next_offset > 0.0)
         {
             debug!("updating scroll offset after item removed");
             forced_scroll_offset = Some(next_content_size - prev_scroll_rect.height());
