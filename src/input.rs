@@ -270,7 +270,9 @@ impl<'a> Input<'a> {
                         if keysym.raw() != xkeysym::key::Caps_Lock {
                             debug!("ignoring modifier: {keysym:?}");
                         } else {
-                            trace!("ignoring CapsLock modifier event, CapsLock state is read directly when processing other key events");
+                            trace!(
+                                "ignoring CapsLock modifier event, CapsLock state is read directly when processing other key events"
+                            );
                         }
                         break 'blk event_iter;
                     }

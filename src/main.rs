@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow, bail};
 use egui::Modifiers;
 use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
-use memoni::input::Input;
 use memoni::keymap_spec::{KeyAction, PasteModifier, PointerAction, SimpleScrollAction};
 use memoni::persistence::Persistence;
 use memoni::search::Search;
@@ -13,6 +12,7 @@ use memoni::x11_key_converter::X11KeyConverter;
 use memoni::x11_window::X11Window;
 use memoni::{AppMode, ordered_hash_map::OrderedHashMapView};
 use memoni::{config::Config, keymap_action::KeymapAction};
+use memoni::{input::Input, utils::x11_cursor_name};
 use memoni::{opengl_context::OpenGLContext, selection::SelectionType};
 use mio::unix::SourceFd;
 use signal_hook::consts::TERM_SIGNALS;
@@ -618,6 +618,9 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 } else if !pointer_actions.is_empty() {
                     debug!("pointer actions received when no items getting clicked");
                 }
+
+                let cursor_icon = full_output.platform_output.cursor_icon;
+                window.change_pointer_icon(x11_cursor_name(cursor_icon))?;
 
                 gl_context.render(&ui.egui_ctx, full_output)?;
 

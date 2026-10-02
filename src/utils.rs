@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use egui::Key;
+use egui::{CursorIcon, Key};
 use xkeysym::Keysym;
 
 pub fn keysym_to_egui_key(ks: Keysym) -> Option<Key> {
@@ -338,4 +338,26 @@ pub fn to_hex_string(bytes: &[u8]) -> String {
     }
 
     hex_str.into_iter().collect::<String>()
+}
+
+pub fn x11_cursor_name(icon: CursorIcon) -> &'static str {
+    use CursorIcon::*;
+    match icon {
+        Default => "default",
+        PointingHand => "pointer",
+        Text => "text",
+        VerticalText => "vertical-text",
+        Grab => "grab",
+        Grabbing => "grabbing",
+        Crosshair => "crosshair",
+        Wait => "wait",
+        NotAllowed | NoDrop => "not-allowed",
+        ResizeHorizontal => "ew-resize",
+        ResizeVertical => "ns-resize",
+        ResizeNeSw => "nesw-resize",
+        ResizeNwSe => "nwse-resize",
+        AllScroll => "all-scroll",
+        Move => "move",
+        _ => "default",
+    }
 }

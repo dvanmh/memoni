@@ -1,16 +1,16 @@
 extern crate x11rb;
 
-use std::os::unix::ffi::OsStrExt as _;
 use std::{cell::Cell, iter::once};
+use std::{cell::RefCell, os::unix::ffi::OsStrExt as _};
 
 use anyhow::{Result, anyhow, bail};
 use log::{debug, info, trace, warn};
-use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::{ConnectionExt as _, *};
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::xcb_ffi::XCBConnection;
 use x11rb::{connection::Connection, protocol::randr};
+use x11rb::{cursor, protocol::randr::ConnectionExt as _, resource_manager};
 
 use crate::config::{Config, Dimensions, LayoutConfig, WindowPositionMode};
 use crate::selection::SelectionType;
@@ -55,6 +55,9 @@ pub struct X11Window<'a> {
     win_placed_above_pointer: Cell<bool>,
     keyboard_grab_retry_count: Cell<u8>,
     pointer_grab_retry_count: Cell<u8>,
+
+    cursor_handle: cursor::Handle,
+    prev_pointer_name: RefCell<Option<String>>,
 }
 
 impl<'a> X11Window<'a> {
@@ -73,6 +76,9 @@ impl<'a> X11Window<'a> {
             | EventMask::POINTER_MOTION;
         let hidden_win_event_mask = EventMask::STRUCTURE_NOTIFY;
 
+        let database = resource_manager::new_from_default(&conn)?;
+        let cursor_handle = cursor::Handle::new(&conn, screen_num, &database)?.reply()?;
+
         let x11_window = X11Window {
             conn,
             screen,
@@ -89,6 +95,9 @@ impl<'a> X11Window<'a> {
             win_placed_above_pointer: Cell::new(false),
             keyboard_grab_retry_count: Cell::new(0),
             pointer_grab_retry_count: Cell::new(0),
+
+            cursor_handle,
+            prev_pointer_name: RefCell::new(None),
         };
 
         info!("creating main window with id {win_id}");
@@ -381,6 +390,25 @@ impl<'a> X11Window<'a> {
             self.win_id.get(),
             &ChangeWindowAttributesAux::new().event_mask(self.hidden_win_event_mask),
         )?;
+
+        Ok(())
+    }
+
+    pub fn change_pointer_icon(&self, name: &str) -> Result<()> {
+        let mut prev_pointer_name = self.prev_pointer_name.borrow_mut();
+        if prev_pointer_name.as_ref().is_some_and(|pn| pn == name) {
+            return Ok(());
+        }
+
+        let conn = &self.conn;
+        let cursor = self.cursor_handle.load_cursor(conn, name)?;
+        conn.change_window_attributes(
+            self.win_id.get(),
+            &ChangeWindowAttributesAux::new().cursor(cursor),
+        )?;
+        conn.flush()?;
+
+        *prev_pointer_name = Some(name.to_string());
 
         Ok(())
     }
