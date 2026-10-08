@@ -1357,13 +1357,17 @@ fn match_texts<'a>(
         texts.labels.push((plain.as_ref(), m.plain.as_slice()));
     }
 
-    if has_matched_text(&texts) { Some(texts) } else { None }
+    if has_matched_text(&texts) {
+        Some(texts)
+    } else {
+        None
+    }
 }
 
 fn has_matched_text(texts: &ButtonTexts<(&str, &[u32])>) -> bool {
     texts.labels.iter().any(|(_, m)| !m.is_empty())
-    || texts.sublabel.is_some_and(|(_, m)| !m.is_empty())
-    || texts.preview_source.is_some_and(|(_, m)| !m.is_empty())
+        || texts.sublabel.is_some_and(|(_, m)| !m.is_empty())
+        || texts.preview_source.is_some_and(|(_, m)| !m.is_empty())
 }
 
 fn raw_display<'a>(item: &'a SelectionItem, m: &'a SearchMatch) -> Option<RawMatch<'a>> {
