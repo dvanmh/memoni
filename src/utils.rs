@@ -283,10 +283,7 @@ pub fn percent_decode_lossy(input: Cow<str>) -> Cow<str> {
         None => input,
         Some(mut out) => {
             out.extend_from_slice(&bytes[last_copied..]);
-            match String::from_utf8(out) {
-                Ok(s) => Cow::Owned(s),
-                Err(e) => Cow::Owned(String::from_utf8_lossy(e.as_bytes()).into_owned()),
-            }
+            Cow::Owned(String::from_utf8_lossy_owned(out))
         }
     }
 }
