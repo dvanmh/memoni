@@ -896,8 +896,8 @@ fn build_override_text(
     let has_leading = start > 0;
     let has_trailing = substr_end < text.len();
 
-    let leading_ws_byte_end = leading_ws_byte_end.saturating_sub(start).min(end);
-    let trailing_ws_byte_start = trailing_ws_byte_start.saturating_sub(start).min(end);
+    let leading_ws_byte_end = leading_ws_byte_end.saturating_sub(start);
+    let trailing_ws_byte_start = trailing_ws_byte_start.saturating_sub(start);
 
     let mut job_builder = LayoutJobBuilder::new(default_text_format, muted_fg);
     let mut hl_tracker = HighlightTracker::new(r#match, start);
