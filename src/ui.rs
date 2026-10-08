@@ -34,7 +34,7 @@ use crate::{
     selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
     widgets::{
-        clipboard_button::{ButtonTexts, ClipboardButton, ClipboardButtonState},
+        clipboard_button::{ButtonTexts, ClipboardButton, ClipboardButtonState, RawMatch},
         help_modal::HelpModal,
     },
 };
@@ -463,11 +463,11 @@ impl<'a> Ui<'a> {
                                 state = state.keyboard_hint(HINTS[i]);
                             }
                             if mode == AppMode::Search && let Some(m) = matches.get(i) {
-                                state = state.matches(match_texts(
-                                    item,
-                                    m,
-                                    btn_widget.preview.is_some(),
-                                ));
+                                if let Some(matches) = match_texts(item, m, btn_widget.preview.is_some()) {
+                                    state = state.matches(matches);
+                                } else if let Some(raw) = raw_display(item, m) {
+                                    state = state.raw(raw);
+                                }
                             }
 
                             let btn = btn_widget.ui(ui, state);
@@ -1332,7 +1332,7 @@ fn match_texts<'a>(
     item: &'a SelectionItem,
     m: &'a SearchMatch,
     has_preview: bool,
-) -> ButtonTexts<(&'a str, &'a [u32])> {
+) -> Option<ButtonTexts<(&'a str, &'a [u32])>> {
     let item_texts = item.text_data();
     let mut texts: ButtonTexts<(&str, &[u32])> = ButtonTexts::default();
 
@@ -1357,7 +1357,24 @@ fn match_texts<'a>(
         texts.labels.push((plain.as_ref(), m.plain.as_slice()));
     }
 
-    texts
+    if has_matched_text(&texts) { Some(texts) } else { None }
+}
+
+fn has_matched_text(texts: &ButtonTexts<(&str, &[u32])>) -> bool {
+    texts.labels.iter().any(|(_, m)| !m.is_empty())
+    || texts.sublabel.is_some_and(|(_, m)| !m.is_empty())
+    || texts.preview_source.is_some_and(|(_, m)| !m.is_empty())
+}
+
+fn raw_display<'a>(item: &'a SelectionItem, m: &'a SearchMatch) -> Option<RawMatch<'a>> {
+    let (mime, matches) = m.best_raw.as_ref()?;
+    let all_raw = &item.text_data().all_raw;
+    let text = all_raw.get(mime.as_str())?;
+    Some(RawMatch {
+        text,
+        matches,
+        mime,
+    })
 }
 
 fn find_item_at_distance_from(

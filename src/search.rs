@@ -244,7 +244,6 @@ pub struct SearchMatch {
     pub image_alt: SearchMatchedBytes,
     pub file_action: SearchMatchedBytes,
     pub file_uris: Vec<SearchMatchedBytes>,
-    // TODO: display this
     pub best_raw: Option<(String, SearchMatchedBytes)>,
 }
 

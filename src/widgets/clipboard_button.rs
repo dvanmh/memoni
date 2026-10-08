@@ -225,9 +225,9 @@ impl ClipboardButton {
                 let is_pinned = state.is_pinned;
                 let keyboard_hint = state.keyboard_hint;
                 let matches = state.matches.as_ref();
+                let raw = state.raw.as_ref();
 
                 // TODO: make these configurable?
-                let sublabel_gap = 3.0;
                 let keyboard_hint_gap = 10.0;
                 let keyboard_hint_size = 11.0;
 
@@ -269,12 +269,15 @@ impl ClipboardButton {
                     .unwrap_or(0.0);
 
                 let label_height = display_text_height(ui, self.label_style());
-                let sublabel_height = self
-                    .texts
-                    .sublabel
-                    .as_ref()
-                    .map(|_| display_text_height(ui, self.sublabel_style()));
-                let img_src_height = if self.preview.is_some() {
+                let sublabel_height = if raw.is_some() {
+                    Some(display_text_height(ui, self.sublabel_style()))
+                } else {
+                    self.texts
+                        .sublabel
+                        .as_ref()
+                        .map(|_| display_text_height(ui, self.sublabel_style()))
+                };
+                let img_src_height = if self.preview.is_some() && raw.is_none() {
                     self.texts
                         .preview_source
                         .as_ref()
@@ -283,8 +286,13 @@ impl ClipboardButton {
                     None
                 };
 
-                let text_height = (self.texts.labels.len() as f32) * label_height
-                    + sublabel_height.map(|h| h + sublabel_gap).unwrap_or(0.0)
+                let label_count = if raw.is_some() {
+                    1
+                } else {
+                    self.texts.labels.len()
+                };
+                let text_height = (label_count as f32) * label_height
+                    + sublabel_height.unwrap_or(0.0)
                     + img_src_height.unwrap_or(0.0);
                 let preview_height = self.preview.as_ref().map(|i| i.1.y).unwrap_or(0.0);
                 let color_preview_height = self
@@ -382,26 +390,53 @@ impl ClipboardButton {
 
                     cursor_x += padding.x;
                     let mut cursor_y = rect.min.y + padding.y;
-                    for (i, display_text) in self.texts.labels.iter().enumerate() {
+                    if let Some(raw) = raw {
                         let text_pos = Pos2::new(cursor_x, cursor_y);
                         cursor_y += label_height;
 
-                        let label_matches = matches.and_then(|m| m.labels.get(i));
-                        let text = self.text_cache.label(i, || {
+                        let text = self.text_cache.label(0, || {
+                            let display_text =
+                                build_display_text(raw.text, label_style.clone(), self.muted_color);
                             build_paint_text(
                                 ui,
                                 text_width,
-                                display_text,
+                                &display_text,
                                 label_style.clone(),
                                 &label_ellipsis,
                                 self.muted_color,
-                                label_matches,
+                                Some(&(raw.text, raw.matches)),
                             )
                         });
                         paint_text(ui, text_pos, text_width, self.search_match_background, text);
+                    } else {
+                        for (i, display_text) in self.texts.labels.iter().enumerate() {
+                            let text_pos = Pos2::new(cursor_x, cursor_y);
+                            cursor_y += label_height;
+
+                            let label_matches = matches.and_then(|m| m.labels.get(i));
+                            let text = self.text_cache.label(i, || {
+                                build_paint_text(
+                                    ui,
+                                    text_width,
+                                    display_text,
+                                    label_style.clone(),
+                                    &label_ellipsis,
+                                    self.muted_color,
+                                    label_matches,
+                                )
+                            });
+                            paint_text(
+                                ui,
+                                text_pos,
+                                text_width,
+                                self.search_match_background,
+                                text,
+                            );
+                        }
                     }
 
-                    if self.preview.is_some()
+                    if raw.is_none()
+                        && self.preview.is_some()
                         && let Some(display_text) = self.texts.preview_source.as_ref()
                     {
                         let text_pos = Pos2::new(cursor_x, cursor_y);
@@ -442,7 +477,30 @@ impl ClipboardButton {
                         );
                     }
 
-                    if let Some(display_text) = self.texts.sublabel.as_ref() {
+                    if let Some(raw) = raw {
+                        let text_pos = Pos2::new(
+                            cursor_x,
+                            rect.shrink2(padding).bottom() - sublabel_height.unwrap_or(0.0),
+                        );
+
+                        let text = self.text_cache.sublabel(|| {
+                            let display_text = build_display_text(
+                                raw.mime,
+                                sublabel_style.clone(),
+                                self.muted_color,
+                            );
+                            build_paint_text(
+                                ui,
+                                text_width,
+                                &display_text,
+                                sublabel_style,
+                                &sublabel_ellipsis,
+                                self.muted_color,
+                                None,
+                            )
+                        });
+                        paint_text(ui, text_pos, text_width, self.search_match_background, text);
+                    } else if let Some(display_text) = self.texts.sublabel.as_ref() {
                         let text_pos = Pos2::new(
                             cursor_x,
                             rect.shrink2(padding).bottom() - sublabel_height.unwrap_or(0.0),
@@ -1091,6 +1149,7 @@ pub struct ClipboardButtonState<'a> {
     is_pinned: bool,
     keyboard_hint: Option<&'static str>,
     matches: Option<ButtonTexts<(&'a str, &'a [u32])>>,
+    raw: Option<RawMatch<'a>>,
 }
 
 impl<'a> ClipboardButtonState<'a> {
@@ -1117,12 +1176,25 @@ impl<'a> ClipboardButtonState<'a> {
         self.matches = Some(matches);
         self
     }
+
+    #[inline]
+    pub fn raw(mut self, raw: RawMatch<'a>) -> Self {
+        self.raw = Some(raw);
+        self
+    }
 }
 
 #[derive(Debug)]
 struct PaintText {
     text: WidgetText,
     highlight_rects: Vec<Rect>,
+}
+
+#[derive(Debug)]
+pub struct RawMatch<'a> {
+    pub text: &'a str,
+    pub matches: &'a [u32],
+    pub mime: &'a str,
 }
 
 #[derive(Debug)]
