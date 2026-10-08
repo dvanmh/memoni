@@ -502,7 +502,6 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                             let next_search_mode = search.state.mode.cycle();
                             info!("switching search mode to {next_search_mode:?}");
                             search.state.mode = next_search_mode;
-                            search.refresh(&selection.items);
                         }
                         KeyAction::SwitchIme => match &config.switch_ime_command {
                             Some(command) => {
@@ -660,7 +659,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 persistence.save_selection_data(&selection.items, &selection.metadata)?;
             }
 
-            if mode == AppMode::Search && search.query_changed() {
+            if mode == AppMode::Search && (search.query_changed() || search.mode_changed()) {
                 search.refresh(&selection.items);
                 active_id = if search.query.is_empty() {
                     selection.get_first_unpinned_item()

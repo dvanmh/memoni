@@ -45,6 +45,7 @@ pub struct Search {
     pub visible_ids: Vec<u64>,
     pub state: SearchState,
     prev_query: String,
+    prev_mode: SearchMode,
 }
 
 impl Search {
@@ -57,6 +58,7 @@ impl Search {
                 invalid_regex: false,
             },
             prev_query: String::new(),
+            prev_mode: SearchMode::Plain,
         }
     }
 
@@ -71,6 +73,15 @@ impl Search {
     pub fn query_changed(&mut self) -> bool {
         if self.query != self.prev_query {
             self.prev_query = self.query.clone();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn mode_changed(&mut self) -> bool {
+        if self.state.mode != self.prev_mode {
+            self.prev_mode = self.state.mode;
             true
         } else {
             false
