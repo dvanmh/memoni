@@ -266,10 +266,15 @@ background = "#2e313dbf"
 # default: "#cccccc"
 foreground = "#eeeeee"
 
+# Secondary text color
+#
+# default: "#919191"
+secondary_foreground = "#b0b0b0"
+
 # Muted text color
 #
-# default: "#d1d1d160"
-muted_foreground = "#b0b0b0"
+# default: "#bfbfbf60"
+muted_foreground = "#707070"
 
 # Button background
 #

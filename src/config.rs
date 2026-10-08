@@ -178,6 +178,8 @@ pub struct ThemeConfig {
     #[serde_as(as = "DisplayFromStr")]
     pub foreground: Color,
     #[serde_as(as = "DisplayFromStr")]
+    pub secondary_foreground: Color,
+    #[serde_as(as = "DisplayFromStr")]
     pub muted_foreground: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub button_background: Color,
@@ -215,7 +217,8 @@ impl Default for ThemeConfig {
         Self {
             background: Color(0xff191919),
             foreground: Color(0xffcccccc),
-            muted_foreground: Color(0x60d1d1d1),
+            secondary_foreground: Color(0xff919191),
+            muted_foreground: Color(0x60bfbfbf),
             button_background: Color(0xff2f2f2f),
             button_active_background: Color(0xff454545),
             scroll_background: Color(0xff0a0a0a),
