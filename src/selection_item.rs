@@ -281,7 +281,7 @@ impl<'a> SelectionTextData<'a> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextDataTag<'a> {
     Plain,
     ImageSrc,

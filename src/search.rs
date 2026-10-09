@@ -1,5 +1,3 @@
-use std::cmp;
-
 use log::debug;
 use regex::Regex;
 
@@ -8,6 +6,10 @@ use crate::{
     ordered_hash_map::OrderedHashMap,
     selection_item::{SelectionItem, TextDataTag},
 };
+
+const TIER_PRIMARY: f32 = 1.5;
+const TIER_SECONDARY: f32 = 1.25;
+const TIER_RAW: f32 = 1.0;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SearchMode {
@@ -49,6 +51,11 @@ pub struct Search {
     pub state: SearchState,
     prev_query: String,
     prev_mode: SearchMode,
+}
+
+pub struct SearchState {
+    pub mode: SearchMode,
+    pub invalid_regex: bool,
 }
 
 impl Search {
@@ -102,6 +109,9 @@ impl Search {
             return;
         }
 
+        let mut matched: Vec<(u64, Vec<FieldMatch<'_>>)> = Vec::new();
+        let mut fields: Vec<FieldMatch<'_>> = Vec::new();
+
         match self.state.mode {
             SearchMode::Plain | SearchMode::Fuzzy => {
                 self.visible_ids.clear();
@@ -134,52 +144,34 @@ impl Search {
                     SearchMode::Regex => unreachable!(),
                 };
                 let matches = matcher.match_list_indices(&haystacks);
-                if matches.is_empty() {
-                    return;
-                }
 
-                let mut items_with_score = Vec::with_capacity(matches.len() / 2);
                 let mut prev_idx = None;
-                let mut prev_best_raw_score = 0u16;
-                let mut search_match = SearchMatch::default();
-                let mut best_score = 0u16;
                 for m in matches.into_iter().map(Some).chain(std::iter::once(None)) {
                     if let Some(prev_idx) = prev_idx
                         && m.as_ref()
                             .is_none_or(|m| owner[m.index as usize].0 != prev_idx)
                     {
-                        items_with_score.push((
+                        matched.push((
                             *items.get_by_index(prev_idx).unwrap().0,
-                            std::mem::take(&mut search_match),
-                            best_score,
+                            std::mem::take(&mut fields),
                         ));
-                        prev_best_raw_score = 0;
-                        best_score = 0;
                     }
 
                     if let Some(m) = m {
                         let (idx, tag) = &owner[m.index as usize];
 
-                        let is_raw = matches!(tag, TextDataTag::Raw { .. });
-                        if !(is_raw && m.score < prev_best_raw_score) {
-                            // frizbee returns match indices in reverse order
-                            let mut indices = m.indices;
-                            indices.reverse();
-                            search_match.add(indices, tag);
-                        }
-                        if is_raw {
-                            prev_best_raw_score = prev_best_raw_score.max(m.score);
-                        }
+                        // frizbee returns match indices in reverse order
+                        let mut indices = m.indices;
+                        indices.reverse();
 
-                        best_score = best_score.max(m.score);
+                        fields.push(FieldMatch {
+                            tag: tag.clone(),
+                            base_score: f32::from(m.score),
+                            indices,
+                        });
+
                         prev_idx = Some(*idx);
                     }
-                }
-
-                items_with_score.sort_unstable_by_key(|i| cmp::Reverse(i.2));
-                for (id, m, _) in items_with_score {
-                    self.visible_ids.push(id);
-                    self.matches.push(m);
                 }
             }
             SearchMode::Regex => {
@@ -197,26 +189,37 @@ impl Search {
                 self.visible_ids.clear();
 
                 for (&id, item) in items {
-                    let mut matched = false;
-                    let mut search_match = SearchMatch::default();
                     for (s, tag) in item.text_data().flatten() {
-                        let match_indices = query_regex
+                        let indices = query_regex
                             .find_iter(s)
                             .flat_map(|m| (m.start() as u32)..(m.end() as u32))
                             .collect::<Vec<_>>();
 
-                        if !match_indices.is_empty() {
-                            matched = true;
-                            search_match.add(match_indices, &tag);
+                        if !indices.is_empty() {
+                            fields.push(FieldMatch {
+                                tag,
+                                base_score: 1.0,
+                                indices,
+                            });
                         }
                     }
 
-                    if matched {
-                        self.visible_ids.push(id);
-                        self.matches.push(search_match);
+                    if !fields.is_empty() {
+                        matched.push((id, std::mem::take(&mut fields)));
                     }
                 }
             }
+        }
+
+        let mut items_with_score = matched
+            .into_iter()
+            .flat_map(|(id, fields)| create_item_with_score(fields).map(|(m, s)| (id, m, s)))
+            .collect::<Vec<_>>();
+        items_with_score.sort_by(|(_, _, sa), (_, _, sb)| sb.total_cmp(sa));
+
+        for (id, m, _) in items_with_score {
+            self.visible_ids.push(id);
+            self.matches.push(m);
         }
     }
 
@@ -225,6 +228,39 @@ impl Search {
             self.visible_ids.remove(index);
             self.matches.remove(index);
         }
+    }
+}
+
+fn create_item_with_score(fields: Vec<FieldMatch<'_>>) -> Option<(SearchMatch, f32)> {
+    if fields.is_empty() {
+        return None;
+    }
+
+    let mut search_match = SearchMatch::default();
+    let mut best_raw_base = 0f32;
+    let mut best_score = 0f32;
+
+    for field in fields {
+        best_score = best_score.max(field.base_score * tier_weight(&field.tag));
+
+        if matches!(&field.tag, TextDataTag::Raw { .. }) {
+            if field.base_score >= best_raw_base {
+                search_match.add(field.indices, &field.tag);
+            }
+            best_raw_base = best_raw_base.max(field.base_score);
+        } else {
+            search_match.add(field.indices, &field.tag);
+        }
+    }
+
+    Some((search_match, best_score))
+}
+
+fn tier_weight(tag: &TextDataTag<'_>) -> f32 {
+    match tag {
+        TextDataTag::Plain | TextDataTag::FileUri(_) | TextDataTag::ImageAlt => TIER_PRIMARY,
+        TextDataTag::ImageSrc | TextDataTag::FileAction => TIER_SECONDARY,
+        TextDataTag::Raw { .. } => TIER_RAW,
     }
 }
 
@@ -265,7 +301,8 @@ impl SearchMatch {
     }
 }
 
-pub struct SearchState {
-    pub mode: SearchMode,
-    pub invalid_regex: bool,
+struct FieldMatch<'a> {
+    tag: TextDataTag<'a>,
+    base_score: f32,
+    indices: SearchMatchedBytes,
 }
