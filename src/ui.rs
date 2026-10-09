@@ -1338,23 +1338,35 @@ fn match_texts<'a>(
 
     if has_preview {
         if let Some(ref files) = item_texts.files {
-            texts.labels = files
-                .uris
+            let mut ranked: Vec<usize> = (0..m.file_uris.len().min(files.uris.len())).collect();
+            ranked.sort_by(|&a, &b| m.file_uris[b].score.total_cmp(&m.file_uris[a].score));
+            ranked.truncate(2);
+
+            texts.labels = ranked
                 .iter()
-                .zip(&m.file_uris)
-                .map(|(t, m)| (t.display.as_ref(), m.as_slice()))
+                .map(|&i| {
+                    let m = m
+                        .file_uris
+                        .get(i)
+                        .map_or(&[] as &[_], |fm| fm.bytes.as_slice());
+                    (files.uris[i].display.as_ref(), m)
+                })
                 .collect();
-            texts.sublabel = Some((&files.action, m.file_action.as_slice()));
+            texts.sublabel = Some((&files.action, m.file_action.bytes.as_slice()));
         } else {
             if let Some(ref alt) = item_texts.image_metadata.alt {
-                texts.labels.push((alt.as_ref(), m.image_alt.as_slice()));
+                texts
+                    .labels
+                    .push((alt.as_ref(), m.image_alt.bytes.as_slice()));
             }
             if let Some(ref src) = item_texts.image_metadata.src {
-                texts.preview_source = Some((src.as_ref(), m.image_src.as_slice()));
+                texts.preview_source = Some((src.as_ref(), m.image_src.bytes.as_slice()));
             }
         }
     } else if let Some(ref plain) = item_texts.plain {
-        texts.labels.push((plain.as_ref(), m.plain.as_slice()));
+        texts
+            .labels
+            .push((plain.as_ref(), m.plain.bytes.as_slice()));
     }
 
     if has_matched_text(&texts) {
@@ -1371,12 +1383,12 @@ fn has_matched_text(texts: &ButtonTexts<(&str, &[u32])>) -> bool {
 }
 
 fn raw_display<'a>(item: &'a SelectionItem, m: &'a SearchMatch) -> Option<RawMatch<'a>> {
-    let (mime, matches) = m.best_raw.as_ref()?;
+    let (mime, data) = m.best_raw.as_ref()?;
     let all_raw = &item.text_data().all_raw;
     let text = all_raw.get(mime.as_str())?;
     Some(RawMatch {
         text,
-        matches,
+        matches: data.bytes.as_slice(),
         mime,
     })
 }

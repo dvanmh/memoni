@@ -414,8 +414,24 @@ impl ClipboardButton {
                             cursor_y += label_height;
 
                             let label_matches = matches.and_then(|m| m.labels.get(i));
-                            let text = self.text_cache.label(i, || {
-                                build_paint_text(
+                            let text = self.text_cache.label(i, || match label_matches {
+                                Some(&(text, indices)) => {
+                                    let display_text = build_display_text(
+                                        text,
+                                        label_style.clone(),
+                                        self.muted_color,
+                                    );
+                                    build_paint_text(
+                                        ui,
+                                        text_width,
+                                        &display_text,
+                                        label_style.clone(),
+                                        &label_ellipsis,
+                                        self.muted_color,
+                                        Some(&(text, indices)),
+                                    )
+                                }
+                                None => build_paint_text(
                                     ui,
                                     text_width,
                                     display_text,
@@ -423,7 +439,7 @@ impl ClipboardButton {
                                     &label_ellipsis,
                                     self.muted_color,
                                     label_matches,
-                                )
+                                ),
                             });
                             paint_text(
                                 ui,

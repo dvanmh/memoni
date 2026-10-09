@@ -243,13 +243,17 @@ fn create_item_with_score(fields: Vec<FieldMatch<'_>>) -> Option<(SearchMatch, f
     for field in fields {
         best_score = best_score.max(field.base_score * tier_weight(&field.tag));
 
+        let data = MatchData {
+            bytes: field.indices,
+            score: field.base_score,
+        };
         if matches!(&field.tag, TextDataTag::Raw { .. }) {
             if field.base_score >= best_raw_base {
-                search_match.add(field.indices, &field.tag);
+                search_match.add(data, &field.tag);
             }
             best_raw_base = best_raw_base.max(field.base_score);
         } else {
-            search_match.add(field.indices, &field.tag);
+            search_match.add(data, &field.tag);
         }
     }
 
@@ -274,29 +278,35 @@ impl Default for Search {
 pub type SearchMatchedBytes = Vec<u32>;
 
 #[derive(Debug, Default)]
+pub struct MatchData {
+    pub bytes: SearchMatchedBytes,
+    pub score: f32,
+}
+
+#[derive(Debug, Default)]
 pub struct SearchMatch {
-    pub plain: SearchMatchedBytes,
-    pub image_src: SearchMatchedBytes,
-    pub image_alt: SearchMatchedBytes,
-    pub file_action: SearchMatchedBytes,
-    pub file_uris: Vec<SearchMatchedBytes>,
-    pub best_raw: Option<(String, SearchMatchedBytes)>,
+    pub plain: MatchData,
+    pub image_src: MatchData,
+    pub image_alt: MatchData,
+    pub file_action: MatchData,
+    pub file_uris: Vec<MatchData>,
+    pub best_raw: Option<(String, MatchData)>,
 }
 
 impl SearchMatch {
-    pub fn add(&mut self, match_indices: Vec<u32>, tag: &TextDataTag<'_>) {
+    pub fn add(&mut self, data: MatchData, tag: &TextDataTag<'_>) {
         match tag {
-            TextDataTag::Plain => self.plain = match_indices,
-            TextDataTag::ImageSrc => self.image_src = match_indices,
-            TextDataTag::ImageAlt => self.image_alt = match_indices,
-            TextDataTag::FileAction => self.file_action = match_indices,
+            TextDataTag::Plain => self.plain = data,
+            TextDataTag::ImageSrc => self.image_src = data,
+            TextDataTag::ImageAlt => self.image_alt = data,
+            TextDataTag::FileAction => self.file_action = data,
             TextDataTag::FileUri(i) => {
                 if *i >= self.file_uris.len() {
-                    self.file_uris.resize_with(i + 1, Vec::new);
+                    self.file_uris.resize_with(i + 1, MatchData::default);
                 }
-                self.file_uris[*i] = match_indices;
+                self.file_uris[*i] = data;
             }
-            TextDataTag::Raw { mime } => self.best_raw = Some((mime.to_string(), match_indices)),
+            TextDataTag::Raw { mime } => self.best_raw = Some((mime.to_string(), data)),
         }
     }
 }
