@@ -42,6 +42,7 @@ pub struct ClipboardButton {
     color_preview_background: Option<TextureHandle>,
 
     text_cache: ButtonTexts<PaintText>,
+    prev_render_text_width: f32,
 }
 
 impl ClipboardButton {
@@ -308,6 +309,11 @@ impl ClipboardButton {
                     ui.allocate_exact_size(Vec2::new(desired_width, desired_height), Sense::HOVER);
 
                 if ui.is_rect_visible(rect) {
+                    if text_width != self.prev_render_text_width {
+                        self.invalidate_text_cache();
+                    }
+                    self.prev_render_text_width = text_width;
+
                     let visuals = &ui.style().visuals.widgets.inactive;
                     let bg_fill = if is_active {
                         ui.style().visuals.widgets.active.weak_bg_fill

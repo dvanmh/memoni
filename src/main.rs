@@ -584,11 +584,14 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     _ => selection.items.to_view(),
                 };
 
+                let quick_paste_base = ui.quick_paste_base_idx();
                 if let Some(index) = quick_paste_index
-                    && let Some((&id, _)) = selection_items_view.get_by_index(index)
+                    && let Some((&id, _)) =
+                        selection_items_view.get_by_index(quick_paste_base + index)
                 {
                     info!(
-                        "quickpaste item {id} (index {index}) selected by key action, hiding window"
+                        "quickpaste item {id} (index {}) selected by key action, hiding window",
+                        quick_paste_base + index
                     );
                     will_hide_window = true;
                     paste_item_id = Some(id);

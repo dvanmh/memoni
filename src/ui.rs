@@ -139,6 +139,7 @@ pub struct Ui<'a> {
     is_initial_run: bool,
     prev_active_id: u64,
     prev_active_idx: usize,
+    quick_paste_base_idx: usize,
     reset_scroll_offset_next_run: bool,
     prev_pass: PrevPass,
     state: UiState,
@@ -231,6 +232,7 @@ impl<'a> Ui<'a> {
             is_initial_run: true,
             prev_active_id: 0,
             prev_active_idx: 0,
+            quick_paste_base_idx: 0,
             reset_scroll_offset_next_run: false,
             prev_pass: PrevPass {
                 flow: None,
@@ -436,7 +438,14 @@ impl<'a> Ui<'a> {
                 .show(ui, |ui| {
                     self.ribbon(ui, flow);
 
-                    self.scroll_area(ui, flow, *active_id, scroll_offset, scrolloff, |sf, ui| -> Result<()> {
+                    self.scroll_area(ui, flow, *active_id, scroll_offset, scrolloff, |sf, ui, current_offset| -> Result<()> {
+                        let quick_paste_base = sf.compute_quick_paste_base_idx(
+                            flow,
+                            selection_items,
+                            ui.clip_rect(),
+                            current_offset,
+                        );
+                        sf.quick_paste_base_idx = quick_paste_base;
                         sf.prev_pass.item_widgets.clear();
 
                         if selection_items.is_empty() {
@@ -465,8 +474,10 @@ impl<'a> Ui<'a> {
                             let mut state = ClipboardButtonState::default()
                                 .is_active(is_active)
                                 .is_pinned(is_pinned);
-                            if sf.config.show_quick_paste_hint && i < 10 {
-                                state = state.keyboard_hint(HINTS[i]);
+                            if sf.config.show_quick_paste_hint
+                                && (quick_paste_base..quick_paste_base + 10).contains(&i)
+                            {
+                                state = state.keyboard_hint(HINTS[i - quick_paste_base]);
                             }
                             if mode == AppMode::Search && let Some(m) = matches.get(i) {
                                 if let Some(matches) = match_texts(item, m, btn_widget.preview.is_some()) {
@@ -795,7 +806,7 @@ impl<'a> Ui<'a> {
         active_id: u64,
         forced_scroll_offset: Option<f32>,
         scrolloff: f32,
-        add_contents: impl FnOnce(&mut Self, &mut egui::Ui) -> R,
+        add_contents: impl FnOnce(&mut Self, &mut egui::Ui, f32) -> R,
     ) -> R {
         let LayoutConfig {
             window_padding: padding,
@@ -914,7 +925,7 @@ impl<'a> Ui<'a> {
             (
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(padding.x, padding.y))
-                    .show(ui, |ui| add_contents(self, ui))
+                    .show(ui, |ui| add_contents(self, ui, current_offset))
                     .inner,
                 current_offset,
             )
@@ -940,6 +951,36 @@ impl<'a> Ui<'a> {
         };
 
         response
+    }
+
+    fn compute_quick_paste_base_idx(
+        &self,
+        flow: UiFlow,
+        selection_items: &OrderedHashMapView<u64, SelectionItem>,
+        viewport: Rect,
+        current_offset: f32,
+    ) -> usize {
+        let mut first_visible = None;
+        for (i, (id, _)) in selection_items.iter().enumerate() {
+            let Some((_, rect)) = self.prev_pass.item_widgets.get(id) else {
+                continue;
+            };
+
+            let rect = self.next_item_rect(*rect, flow, current_offset);
+            let head = match flow {
+                UiFlow::TopToBottom => rect.min.y,
+                UiFlow::BottomToTop => rect.max.y,
+            };
+            if (viewport.min.y..=viewport.max.y).contains(&head) {
+                return i;
+            }
+
+            if first_visible.is_none() && viewport.intersects(rect) {
+                first_visible = Some(i);
+            }
+        }
+
+        first_visible.unwrap_or(0)
     }
 
     fn next_item_rect(&self, rect: Rect, flow: UiFlow, next_offset: f32) -> Rect {
@@ -1196,6 +1237,14 @@ impl<'a> Ui<'a> {
                 .id(input_id)
                 .show(&mut child_ui);
         }
+
+        if about_to_expand {
+            ui.request_discard(
+                "The search panel overlaps the first item on first expand, causing the \
+                    quick paste hint to jump to the next item briefly. This forces the \
+                    quick paste hints to render correctly in first search panel expanded frame.",
+            );
+        }
     }
 
     pub fn invalidate_text_caches(&mut self) {
@@ -1221,6 +1270,10 @@ impl<'a> Ui<'a> {
 
     pub fn reset_scroll_offset(&mut self) {
         self.reset_scroll_offset_next_run = true;
+    }
+
+    pub fn quick_paste_base_idx(&self) -> usize {
+        self.quick_paste_base_idx
     }
 
     pub fn build_button_widget(&mut self, item: &SelectionItem) -> Result<()> {
