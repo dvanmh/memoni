@@ -970,7 +970,7 @@ fn iter_char_to_display_text(
 
 fn to_display_whitespace(c: char, convert_space: bool) -> Option<&'static str> {
     Some(match c {
-        ' ' if convert_space => "·",
+        ' ' if convert_space => " ⸱ ",
         '\t' => " ⇥ ",
         '\n' => "↵",
         '\r' => "␍",
