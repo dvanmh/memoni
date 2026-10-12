@@ -513,7 +513,7 @@ impl<'a> Ui<'a> {
             }
             self.pending_keys_overlay(ui, pending_keys, flow);
 
-            self.error_overlay(ui);
+            self.error_overlay(ui, flow);
 
             self.prev_pass.flow = Some(flow);
         });
@@ -1035,7 +1035,7 @@ impl<'a> Ui<'a> {
         self.error_message = Some((message.into(), Instant::now()));
     }
 
-    fn error_overlay(&mut self, ui: &egui::Ui) {
+    fn error_overlay(&mut self, ui: &egui::Ui, flow: UiFlow) {
         if self
             .error_message
             .as_ref()
@@ -1065,7 +1065,10 @@ impl<'a> Ui<'a> {
 
         let galley_pos = egui::pos2(
             rect.left() + margin.x + padding.x,
-            rect.bottom() - margin.y - padding.y - galley.size().y,
+            match flow {
+                UiFlow::TopToBottom => rect.bottom() - margin.y - padding.y - galley.size().y,
+                UiFlow::BottomToTop => rect.top() + margin.y + padding.y,
+            },
         );
         let bg_rect = Rect::from_min_size(galley_pos - padding, galley.size() + padding * 2.0);
 
