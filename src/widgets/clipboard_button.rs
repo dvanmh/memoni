@@ -593,8 +593,17 @@ fn build_paint_text(
     } else {
         (galley, display_text)
     };
-    let slice = galley_slice(display_text, &galley, text_width, ellipsis_width);
 
+    let mut layout_job = LayoutJob::default();
+
+    if galley.is_empty() {
+        return PaintText {
+            text: layout_job.into(),
+            highlight_rects: vec![],
+        };
+    }
+
+    let slice = galley_slice(display_text, &galley, text_width, ellipsis_width);
     let highlight_offset = -galley.rows[0].row.glyphs[slice.start_glyph_idx].pos.x
         + if slice.leading_ellipsis {
             ellipsis_width
@@ -603,7 +612,6 @@ fn build_paint_text(
         };
     let highlight_rects = build_highlight_rects(&galley, &highlight, highlight_offset);
 
-    let mut layout_job = LayoutJob::default();
     if slice.leading_ellipsis {
         append_job(&mut layout_job, &ellipsis.job);
     }
@@ -771,7 +779,7 @@ fn galley_slice(
     ellipsis_width: f32,
 ) -> GalleySlice {
     let row = &galley.rows[0].row;
-    let mut start_glyph_idx = display_text.start_glyph_idx.min(row.glyphs.len());
+    let mut start_glyph_idx = display_text.start_glyph_idx.min(row.glyphs.len() - 1);
     let mut render_to_end_width = row.size.x - row.glyphs[start_glyph_idx].pos.x;
 
     let leading_ellipsis = display_text.has_leading || display_text.start_glyph_idx > 0;
