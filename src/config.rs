@@ -38,6 +38,7 @@ pub struct Config {
     pub show_ribbon: bool,
     pub scroll_bar_auto_hide: bool,
     pub drag_scroll: bool,
+    pub scroll_off: f32,
     pub show_quick_paste_hint: bool,
     #[serde_as(as = "OneOrMany<_>")]
     pub window_position_mode: Vec<WindowPositionMode>,
@@ -67,6 +68,7 @@ impl Default for Config {
             show_ribbon: false,
             scroll_bar_auto_hide: false,
             drag_scroll: false,
+            scroll_off: 0.0,
             show_quick_paste_hint: true,
             window_position_mode: vec![],
             app_paste_keymaps: Default::default(),

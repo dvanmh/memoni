@@ -382,6 +382,12 @@ impl<'a> Ui<'a> {
             egui_ctx.request_discard("Recalculate scroll offset when active item is moved");
         }
 
+        let scrolloff = if scroll_actions.is_empty() {
+            0.0
+        } else {
+            self.config.scroll_off
+        };
+
         let mut run_error = None;
         let mut clicked_item = None;
         let full_output = egui_ctx.run_ui(egui_input, |ui| {
@@ -430,7 +436,7 @@ impl<'a> Ui<'a> {
                 .show(ui, |ui| {
                     self.ribbon(ui);
 
-                    self.scroll_area(ui, flow, *active_id, scroll_offset, |sf, ui| -> Result<()> {
+                    self.scroll_area(ui, flow, *active_id, scroll_offset, scrolloff, |sf, ui| -> Result<()> {
                         sf.prev_pass.item_widgets.clear();
 
                         if selection_items.is_empty() {
@@ -788,6 +794,7 @@ impl<'a> Ui<'a> {
         flow: UiFlow,
         active_id: u64,
         forced_scroll_offset: Option<f32>,
+        scrolloff: f32,
         add_contents: impl FnOnce(&mut Self, &mut egui::Ui) -> R,
     ) -> R {
         let LayoutConfig {
@@ -858,17 +865,33 @@ impl<'a> Ui<'a> {
             && let Some(active_rect) = active_next_rect
             && let unpadded_scroll_rect =
                 next_scroll_rect.shrink2(egui::vec2(0.0, padding.y as f32))
-            && !unpadded_scroll_rect.contains_rect(active_rect)
         {
-            debug!("scrolling active item into view");
-            if active_rect.top() < unpadded_scroll_rect.top() {
-                forced_scroll_offset = Some(active_rect.top() + next_offset - padding.y as f32);
+            let scrolloff = if is_prev_overflow {
+                scrolloff.clamp(0.0, unpadded_scroll_rect.height() / 2.0)
             } else {
-                forced_scroll_offset = Some(
-                    active_rect.bottom() + next_offset
+                0.0
+            };
+            let scrolloff_rect = unpadded_scroll_rect.shrink2(egui::vec2(0.0, scrolloff));
+            if !scrolloff_rect.contains_rect(active_rect) {
+                debug!("scrolling active item into view");
+                let desired_offset = if active_rect.top() < scrolloff_rect.top() {
+                    active_rect.top() + next_offset - padding.y as f32 - scrolloff
+                } else {
+                    active_rect.bottom() + next_offset + scrolloff
                         - unpadded_scroll_rect.height()
-                        - padding.y as f32,
-                );
+                        - padding.y as f32
+                };
+                if scrolloff > 0.0 {
+                    // Clamped offset may not honor the scrolloff margin (e.g. near list ends),
+                    // skip forcing it to avoid resetting the scroll velocity every frame
+                    let max_offset = (prev_content_size - prev_scroll_rect.height()).max(0.0);
+                    let desired_offset = desired_offset.clamp(0.0, max_offset);
+                    if (desired_offset - next_offset).abs() > 0.5 {
+                        forced_scroll_offset = Some(desired_offset);
+                    }
+                } else {
+                    forced_scroll_offset = Some(desired_offset);
+                }
             }
         }
 

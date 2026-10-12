@@ -19,6 +19,12 @@ scroll_bar_auto_hide = true
 # default: false
 drag_scroll = true
 
+# Minimum gap (px) kept between the active item and the item list edges while
+# navigating with the keyboard (vim's "scrolloff")
+#
+# default: 0
+scroll_off = 100
+
 # Shows quick paste keyboard shortcut hints on buttons
 #
 # default: true
