@@ -511,7 +511,7 @@ impl<'a> Ui<'a> {
                 debug!("active item changed, clearing pending keys");
                 pending_keys.clear();
             }
-            self.pending_keys_overlay(ui, pending_keys);
+            self.pending_keys_overlay(ui, pending_keys, flow);
 
             self.error_overlay(ui);
 
@@ -985,7 +985,7 @@ impl<'a> Ui<'a> {
         ));
     }
 
-    fn pending_keys_overlay(&self, ui: &egui::Ui, pending_keys: &[KeyChord]) {
+    fn pending_keys_overlay(&self, ui: &egui::Ui, pending_keys: &[KeyChord], flow: UiFlow) {
         if pending_keys.is_empty() {
             return;
         }
@@ -1014,7 +1014,13 @@ impl<'a> Ui<'a> {
             rect.width() - margin.x * 2.0 - padding.x * 2.0,
         );
 
-        let galley_pos = rect.right_bottom() - margin - padding - galley.size();
+        let galley_pos = egui::pos2(
+            rect.right() - margin.x - padding.x - galley.size().x,
+            match flow {
+                UiFlow::TopToBottom => rect.bottom() - margin.y - padding.y - galley.size().y,
+                UiFlow::BottomToTop => rect.top() + margin.y + padding.y,
+            },
+        );
         let bg_rect = Rect::from_min_size(galley_pos - padding, galley.size() + padding * 2.0);
 
         painter.rect_filled(
