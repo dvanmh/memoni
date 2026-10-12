@@ -429,7 +429,7 @@ impl<'a> Ui<'a> {
                 *active_id = in_view_id;
             }
 
-            self.search_panel(ui, mode == AppMode::Search, search_query, search_state);
+            self.search_panel(ui, flow, mode == AppMode::Search, search_query, search_state);
 
             let scroll_output = egui::CentralPanel::default()
                 .frame(egui::Frame::new())
@@ -1068,6 +1068,7 @@ impl<'a> Ui<'a> {
     fn search_panel(
         &self,
         ui: &mut egui::Ui,
+        flow: UiFlow,
         display_search: bool,
         query: &mut String,
         state: &SearchState,
@@ -1126,9 +1127,12 @@ impl<'a> Ui<'a> {
             ui.global_style_mut(|s| s.animation_time = 0.0);
         }
 
-        let mut panel = egui::Panel::bottom(panel_id)
-            .resizable(false)
-            .drag_to_open(false);
+        let mut panel = match flow {
+            UiFlow::TopToBottom => egui::Panel::top(panel_id),
+            UiFlow::BottomToTop => egui::Panel::bottom(panel_id),
+        }
+        .resizable(false)
+        .drag_to_open(false);
         if let Some(height) = initial_height {
             panel = panel.exact_size(height);
         }
