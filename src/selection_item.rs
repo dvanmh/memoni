@@ -111,7 +111,11 @@ fn extract_text_from_data<'a>(id: u64, sel_data: &'a SelectionData) -> Selection
 
             moz_url = Some(ImageMetadata {
                 src: Some(Cow::Owned(src.to_string())),
-                alt: Some(Cow::Owned(alt.to_string())),
+                alt: if alt.is_empty() {
+                    None
+                } else {
+                    Some(Cow::Owned(alt.to_string()))
+                },
             });
 
             all_raw.insert(mime, Cow::Owned(data));
