@@ -434,7 +434,7 @@ impl<'a> Ui<'a> {
             let scroll_output = egui::CentralPanel::default()
                 .frame(egui::Frame::new())
                 .show(ui, |ui| {
-                    self.ribbon(ui);
+                    self.ribbon(ui, flow);
 
                     self.scroll_area(ui, flow, *active_id, scroll_offset, scrolloff, |sf, ui| -> Result<()> {
                         sf.prev_pass.item_widgets.clear();
@@ -955,7 +955,7 @@ impl<'a> Ui<'a> {
         rect.translate(egui::vec2(0.0, prev_offset - next_offset))
     }
 
-    fn ribbon(&self, ui: &egui::Ui) {
+    fn ribbon(&self, ui: &egui::Ui, flow: UiFlow) {
         if !self.config.show_ribbon {
             return;
         }
@@ -963,14 +963,20 @@ impl<'a> Ui<'a> {
         let size = self.config.layout.ribbon_size;
         let color = self.config.theme.ribbon;
 
-        let mut points = [
-            egui::pos2(-size, 0.0),
-            egui::pos2(0.0, 0.0),
-            egui::pos2(0.0, size),
+        let x = ui.min_rect().width();
+        let y = match flow {
+            UiFlow::TopToBottom => ui.min_rect().top(),
+            UiFlow::BottomToTop => ui.min_rect().bottom(),
+        };
+        let end_y = match flow {
+            UiFlow::TopToBottom => y + size,
+            UiFlow::BottomToTop => y - size,
+        };
+        let points = [
+            egui::pos2(x - size, y),
+            egui::pos2(x, y),
+            egui::pos2(x, end_y),
         ];
-        for p in &mut points {
-            p.x += ui.min_rect().width();
-        }
 
         ui.painter().add(epaint::Shape::convex_polygon(
             points.to_vec(),
