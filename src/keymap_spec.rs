@@ -302,6 +302,11 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Passthrough),
             ),
             KeymapEntry::new(
+                &["C-c"],
+                "Copy highlighted text in the search input",
+                plain!(Action::Key(KeyAction::CopySearchSelection)),
+            ),
+            KeymapEntry::new(
                 &["Backspace", "C-h"],
                 "Delete character left",
                 plain!(Action::Emit(Key::Backspace, Modifiers::NONE)),
@@ -687,6 +692,7 @@ pub enum KeyAction {
     Pin,
     ShowSearch,
     CycleSearchMode,
+    CopySearchSelection,
     SwitchIme,
     ShowHelp,
     SimpleScroll(SimpleScrollAction),

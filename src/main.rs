@@ -504,6 +504,28 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                             info!("switching search mode to {next_search_mode:?}");
                             search.state.mode = next_search_mode;
                         }
+                        KeyAction::CopySearchSelection => {
+                            if let Some(text) = ui.search_selected_text(&search.query) {
+                                info!("copying highlighted search text");
+                                let (new_item, removed_items) = selection.insert_text_item(text)?;
+
+                                ui.remove_button_widgets(removed_items);
+                                if let Some(item) = new_item {
+                                    ui.build_button_widget(item)?;
+
+                                    let item_id = item.id();
+                                    selection.set_next_paste_item(item_id)?;
+                                }
+
+                                search.refresh(&selection.items);
+                                ui.invalidate_text_caches();
+                                active_id = search.visible_ids.first().copied().unwrap_or(0);
+                                ui.reset_scroll_offset();
+
+                                persistence
+                                    .save_selection_data(&selection.items, &selection.metadata)?;
+                            }
+                        }
                         KeyAction::SwitchIme => match &config.switch_ime_command {
                             Some(command) => {
                                 debug!("switching IME with command: {command:?}");

@@ -16,6 +16,8 @@ use egui::{
     emath::GuiRounding as _,
     epaint,
     scroll_area::{DragScroll, ScrollSource},
+    text_selection,
+    widgets::text_edit::TextEditState,
 };
 use fontconfig::Fontconfig;
 use image::{GenericImageView, RgbaImage};
@@ -1245,6 +1247,18 @@ impl<'a> Ui<'a> {
                     quick paste hints to render correctly in first search panel expanded frame.",
             );
         }
+    }
+
+    pub fn search_selected_text<'q>(&self, query: &'q str) -> Option<&'q str> {
+        let state = TextEditState::load(&self.egui_ctx, Id::new("search_input"))?;
+        let range = state.cursor.char_range()?.as_sorted_char_range();
+        if range.is_empty() {
+            return None;
+        }
+
+        Some(text_selection::text_cursor_state::slice_char_range(
+            query, range,
+        ))
     }
 
     pub fn invalidate_text_caches(&mut self) {

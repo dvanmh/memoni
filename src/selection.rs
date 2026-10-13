@@ -267,13 +267,7 @@ impl<'a> Selection<'a> {
                                 "selection owner died ({:?}), taking over ownership with item {item_id}",
                                 ev.subtype
                             );
-                            conn.set_selection_owner(
-                                paste_window,
-                                self.selection_atom,
-                                x11rb::CURRENT_TIME,
-                            )?
-                            .check()?;
-                            self.paste_item_id = Some(item_id);
+                            self.set_next_paste_item(item_id)?;
                         }
                         _ => {}
                     }
@@ -876,7 +870,6 @@ impl<'a> Selection<'a> {
         }
 
         let prev_item = self.items.front();
-        let new_item_id = hash_selection_data(data)?;
         let mut removed = Vec::new();
 
         // We only support merge plaintext items without any other type of data
@@ -902,6 +895,34 @@ impl<'a> Selection<'a> {
             removed.push(self.items.pop_front().unwrap().1);
         }
 
+        let (new_item_id, new_item, removed) =
+            self.insert_data_item(mem::take(data), removed, owner)?;
+
+        info!("selection transfer completed with new selection: {new_item_id}");
+        Ok(Some((new_item, removed)))
+    }
+
+    pub fn insert_text_item(
+        &mut self,
+        text: &str,
+    ) -> Result<(Option<&SelectionItem>, Vec<SelectionItem>)> {
+        info!("inserting highlighted search text into history");
+        let data = SelectionData::from([(
+            "text/plain;charset=utf-8".to_owned(),
+            text.as_bytes().to_vec(),
+        )]);
+        let (_, new_item, removed) = self.insert_data_item(data, Vec::new(), 0)?;
+        Ok((new_item, removed))
+    }
+
+    fn insert_data_item(
+        &mut self,
+        mut data: SelectionData,
+        mut removed: Vec<SelectionItem>,
+        owner: Owner,
+    ) -> Result<(u64, Option<&SelectionItem>, Vec<SelectionItem>)> {
+        let new_item_id = hash_selection_data(&data)?;
+
         let mut is_previously_seen = false;
         let mut new_item = None;
         if self.items.contains_key(&new_item_id) {
@@ -919,7 +940,7 @@ impl<'a> Selection<'a> {
             self.items.insert(
                 self.metadata.pinned_count,
                 new_item_id,
-                SelectionItem::create(new_item_id, mem::take(data)),
+                SelectionItem::create(new_item_id, mem::take(&mut data)),
             );
 
             if self.items.len() > self.config.item_limit {
@@ -930,9 +951,8 @@ impl<'a> Selection<'a> {
             new_item = self.items.get(&new_item_id);
         }
 
-        info!("selection transfer completed with new selection: {new_item_id}");
         self.prev_item_metadata = Some((owner, Instant::now(), is_previously_seen));
-        Ok(Some((new_item, removed)))
+        Ok((new_item_id, new_item, removed))
     }
 
     fn purge_overdue_tasks(&mut self) {
@@ -1000,8 +1020,7 @@ impl<'a> Selection<'a> {
             return Ok(());
         }
 
-        conn.set_selection_owner(paste_window, self.selection_atom, x11rb::CURRENT_TIME)?
-            .check()?;
+        self.set_next_paste_item(item_id)?;
 
         let (key, move_pointer, keycode) = get_input_utils(conn, self.screen, self.key_converter);
 
@@ -1106,8 +1125,18 @@ impl<'a> Selection<'a> {
         }
         conn.sync()?;
 
-        self.paste_item_id = Some(item_id);
         self.next_paste_modifier = Some(modifier);
+
+        Ok(())
+    }
+
+    pub fn set_next_paste_item(&mut self, item_id: u64) -> Result<()> {
+        let paste_window = self.window.win_id.get();
+        self.window
+            .conn
+            .set_selection_owner(paste_window, self.selection_atom, x11rb::CURRENT_TIME)?
+            .check()?;
+        self.paste_item_id = Some(item_id);
 
         Ok(())
     }
