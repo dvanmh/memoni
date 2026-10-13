@@ -32,7 +32,7 @@ use crate::{
     freedesktop_cache::get_cached_thumbnail,
     keymap_spec::{KeyChord, ScrollAction},
     ordered_hash_map::OrderedHashMapView,
-    search::{SearchMatch, SearchMode, SearchState},
+    search::{SearchMatch, SearchMatchedBytes, SearchMode, SearchState},
     selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
     widgets::{
@@ -1441,9 +1441,9 @@ fn match_texts<'a>(
     item: &'a SelectionItem,
     m: &'a SearchMatch,
     has_preview: bool,
-) -> Option<ButtonTexts<(&'a str, &'a [u32])>> {
+) -> Option<ButtonTexts<(&'a str, &'a SearchMatchedBytes)>> {
     let item_texts = item.text_data();
-    let mut texts: ButtonTexts<(&str, &[u32])> = ButtonTexts::default();
+    let mut texts: ButtonTexts<(&str, &SearchMatchedBytes)> = ButtonTexts::default();
 
     if has_preview {
         if let Some(ref files) = item_texts.files {
@@ -1453,29 +1453,31 @@ fn match_texts<'a>(
 
             texts.labels = ranked
                 .iter()
-                .map(|&i| {
-                    let m = m
-                        .file_uris
-                        .get(i)
-                        .map_or(&[] as &[_], |fm| fm.bytes.as_slice());
-                    (files.uris[i].display.as_ref(), m)
+                .filter_map(|&i| {
+                    let bytes = &m.file_uris.get(i)?.bytes;
+                    if bytes.is_empty() {
+                        return None;
+                    }
+                    Some((files.uris[i].display.as_ref(), bytes))
                 })
                 .collect();
-            texts.sublabel = Some((&files.action, m.file_action.bytes.as_slice()));
+            texts.sublabel = Some((&files.action, &m.file_action.bytes));
         } else {
-            if let Some(ref alt) = item_texts.image_metadata.alt {
-                texts
-                    .labels
-                    .push((alt.as_ref(), m.image_alt.bytes.as_slice()));
+            if let Some(ref alt) = item_texts.image_metadata.alt
+                && !m.image_alt.bytes.is_empty()
+            {
+                texts.labels.push((alt.as_ref(), &m.image_alt.bytes));
             }
-            if let Some(ref src) = item_texts.image_metadata.src {
-                texts.preview_source = Some((src.as_ref(), m.image_src.bytes.as_slice()));
+            if let Some(ref src) = item_texts.image_metadata.src
+                && !m.image_src.bytes.is_empty()
+            {
+                texts.preview_source = Some((src.as_ref(), &m.image_src.bytes));
             }
         }
-    } else if let Some(ref plain) = item_texts.plain {
-        texts
-            .labels
-            .push((plain.as_ref(), m.plain.bytes.as_slice()));
+    } else if let Some(ref plain) = item_texts.plain
+        && !m.plain.bytes.is_empty()
+    {
+        texts.labels.push((plain.as_ref(), &m.plain.bytes));
     }
 
     if has_matched_text(&texts) {
@@ -1485,7 +1487,7 @@ fn match_texts<'a>(
     }
 }
 
-fn has_matched_text(texts: &ButtonTexts<(&str, &[u32])>) -> bool {
+fn has_matched_text(texts: &ButtonTexts<(&str, &SearchMatchedBytes)>) -> bool {
     texts.labels.iter().any(|(_, m)| !m.is_empty())
         || texts.sublabel.is_some_and(|(_, m)| !m.is_empty())
         || texts.preview_source.is_some_and(|(_, m)| !m.is_empty())
@@ -1497,7 +1499,7 @@ fn raw_display<'a>(item: &'a SelectionItem, m: &'a SearchMatch) -> Option<RawMat
     let text = all_raw.get(mime.as_str())?;
     Some(RawMatch {
         text,
-        matches: data.bytes.as_slice(),
+        matches: &data.bytes,
         mime,
     })
 }

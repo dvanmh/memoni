@@ -1,5 +1,6 @@
-use std::{iter::Peekable, mem, range::Range, slice::Iter, sync::Arc};
+use std::{mem, range::Range, sync::Arc};
 
+use crate::search::{SearchMatchedBytes, SearchMatchedGroups};
 use egui::{
     Color32, CornerRadius, FontId, Galley, Image, Pos2, Rect, Response, RichText, Sense, Stroke,
     StrokeKind, TextFormat, TextStyle, TextWrapMode, TextureHandle, Ui, UiBuilder, Vec2,
@@ -10,8 +11,10 @@ use egui::{
 // Very very long string causes egui to choke on first render,
 // even when we only display it on a single line with small width.
 const DISPLAY_LIMIT: usize = 1000;
-
 const SEARCH_MATCH_CONTEXT_LIMIT: usize = 12;
+
+const RECT_SEAM_MAX_GAP: f32 = 1.0;
+const RECT_SEAM_INSET: f32 = 0.5;
 
 const ELLIPSIS: &str = "…";
 
@@ -573,7 +576,7 @@ fn build_paint_text(
     style: TextFormat,
     ellipsis: &Arc<Galley>,
     muted_fg: Color32,
-    matches: Option<&(&str, &[u32])>,
+    matches: Option<&(&str, &SearchMatchedBytes)>,
 ) -> PaintText {
     let galley = display_text.text.clone().into_galley(
         ui,
@@ -729,7 +732,7 @@ fn measure_truncation(galley: &Galley, text_width: f32, ellipsis_width: f32) -> 
 
 fn build_highlight(
     text: &str,
-    matches: &[u32],
+    matches: &SearchMatchedBytes,
     rendered_len: usize,
     style: TextFormat,
     muted_fg: Color32,
@@ -748,7 +751,7 @@ fn build_highlight(
         let was_highlighted = hl_tracker.start_char_idx.is_some();
         let highlighted = hl_tracker.track(c, byte_idx);
         if was_highlighted && !highlighted {
-            // A highlighted group can be rendered fully
+            // The highlight run ended on an unmatched char, so it renders fully
             needs_override_text = false;
         }
 
@@ -756,7 +759,11 @@ fn build_highlight(
             text_processed_fully = false;
             break;
         }
-        hl_tracker.advance(display);
+
+        // The highlight run closed at a group boundary, so it renders fully
+        if hl_tracker.advance(display) {
+            needs_override_text = false;
+        }
     }
 
     if text_processed_fully {
@@ -867,18 +874,25 @@ fn build_highlight_rects(galley: &Galley, highlight: &[Range<usize>], x_offset: 
         );
     }
 
+    for i in 0..rects.len().saturating_sub(1) {
+        if (rects[i].max.x - rects[i + 1].min.x).abs() < RECT_SEAM_MAX_GAP {
+            rects[i].max.x -= RECT_SEAM_INSET;
+            rects[i + 1].min.x += RECT_SEAM_INSET;
+        }
+    }
+
     rects
 }
 
 fn build_override_text(
     text: &str,
-    r#match: &[u32],
+    r#match: &SearchMatchedBytes,
     default_text_format: TextFormat,
     muted_fg: Color32,
     leading_ws_byte_end: usize,
     trailing_ws_byte_start: usize,
 ) -> (Vec<Range<usize>>, DisplayText) {
-    let mut start = r#match[0] as usize;
+    let mut start = r#match.first().unwrap() as usize;
     while !text.is_char_boundary(start) {
         start -= 1;
     }
@@ -1061,21 +1075,27 @@ fn append_job_range(dst: &mut LayoutJob, src: &LayoutJob, start: usize, end_incl
 }
 
 struct HighlightTracker<'a> {
-    matches: Peekable<Iter<'a, u32>>,
+    groups: SearchMatchedGroups<'a>,
+    group: Option<&'a [u32]>,
     byte_origin: usize,
     highlights: Vec<Range<usize>>,
     start_char_idx: Option<usize>,
     display_len: usize,
+    group_ended: bool,
 }
 
 impl<'a> HighlightTracker<'a> {
-    fn new(matches: &'a [u32], byte_origin: usize) -> Self {
+    fn new(matches: &'a SearchMatchedBytes, byte_origin: usize) -> Self {
+        let mut groups = matches.groups();
+        let group = groups.next();
         Self {
-            matches: matches.iter().peekable(),
+            groups,
+            group,
             byte_origin,
             highlights: vec![],
             start_char_idx: None,
             display_len: 0,
+            group_ended: false,
         }
     }
 
@@ -1083,11 +1103,19 @@ impl<'a> HighlightTracker<'a> {
         let start = byte_idx + self.byte_origin;
         let end = start + c.len_utf8();
         let mut highlighted = false;
-        while let Some(&&matched_byte) = self.matches.peek()
-            && (start..end).contains(&(matched_byte as usize))
-        {
-            highlighted = true;
-            self.matches.next();
+        while let Some(bytes) = self.group {
+            match bytes.split_first() {
+                Some((&matched_byte, rest)) if (start..end).contains(&(matched_byte as usize)) => {
+                    highlighted = true;
+                    self.group = if rest.is_empty() {
+                        self.group_ended = true;
+                        self.groups.next()
+                    } else {
+                        Some(rest)
+                    };
+                }
+                _ => break,
+            }
         }
 
         if highlighted != self.start_char_idx.is_some() {
@@ -1102,8 +1130,17 @@ impl<'a> HighlightTracker<'a> {
         highlighted
     }
 
-    fn advance(&mut self, display: &str) {
+    fn advance(&mut self, display: &str) -> bool {
         self.display_len += display.chars().count();
+        if self.group_ended {
+            self.group_ended = false;
+            if let Some(start_idx) = self.start_char_idx.take() {
+                self.highlights.push((start_idx..self.display_len).into());
+                return true;
+            }
+        }
+
+        false
     }
 
     fn finish(mut self) -> Vec<Range<usize>> {
@@ -1178,7 +1215,7 @@ pub struct ClipboardButtonState<'a> {
     is_active: bool,
     is_pinned: bool,
     keyboard_hint: Option<&'static str>,
-    matches: Option<ButtonTexts<(&'a str, &'a [u32])>>,
+    matches: Option<ButtonTexts<(&'a str, &'a SearchMatchedBytes)>>,
     raw: Option<RawMatch<'a>>,
 }
 
@@ -1202,7 +1239,7 @@ impl<'a> ClipboardButtonState<'a> {
     }
 
     #[inline]
-    pub fn matches(mut self, matches: ButtonTexts<(&'a str, &'a [u32])>) -> Self {
+    pub fn matches(mut self, matches: ButtonTexts<(&'a str, &'a SearchMatchedBytes)>) -> Self {
         self.matches = Some(matches);
         self
     }
@@ -1223,7 +1260,7 @@ struct PaintText {
 #[derive(Debug)]
 pub struct RawMatch<'a> {
     pub text: &'a str,
-    pub matches: &'a [u32],
+    pub matches: &'a SearchMatchedBytes,
     pub mime: &'a str,
 }
 

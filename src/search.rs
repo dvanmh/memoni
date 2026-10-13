@@ -167,7 +167,7 @@ impl Search {
                         fields.push(FieldMatch {
                             tag: tag.clone(),
                             base_score: f32::from(m.score),
-                            indices,
+                            indices: SearchMatchedBytes::single(indices),
                         });
 
                         prev_idx = Some(*idx);
@@ -190,10 +190,10 @@ impl Search {
 
                 for (&id, item) in items {
                     for (s, tag) in item.text_data().flatten() {
-                        let indices = query_regex
-                            .find_iter(s)
-                            .flat_map(|m| (m.start() as u32)..(m.end() as u32))
-                            .collect::<Vec<_>>();
+                        let mut indices = SearchMatchedBytes::default();
+                        for m in query_regex.find_iter(s) {
+                            indices.push_group((m.start() as u32)..(m.end() as u32));
+                        }
 
                         if !indices.is_empty() {
                             fields.push(FieldMatch {
@@ -274,8 +274,61 @@ impl Default for Search {
     }
 }
 
-/// Matched bytes in order
-pub type SearchMatchedBytes = Vec<u32>;
+/// Matched bytes in order, split into groups.
+#[derive(Debug, Default)]
+pub struct SearchMatchedBytes {
+    bytes: Vec<u32>,
+    group_lens: Vec<u32>,
+}
+
+impl SearchMatchedBytes {
+    pub fn single(bytes: Vec<u32>) -> Self {
+        let mut group_lens = Vec::with_capacity(1);
+        if !bytes.is_empty() {
+            group_lens.push(bytes.len() as u32);
+        }
+        Self { bytes, group_lens }
+    }
+
+    pub fn push_group(&mut self, bytes: impl Iterator<Item = u32>) {
+        let start = self.bytes.len();
+        self.bytes.extend(bytes);
+        if self.bytes.len() > start {
+            self.group_lens.push((self.bytes.len() - start) as u32);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    pub fn first(&self) -> Option<u32> {
+        self.bytes.first().copied()
+    }
+
+    pub fn groups(&self) -> SearchMatchedGroups<'_> {
+        SearchMatchedGroups {
+            bytes: &self.bytes,
+            lens: self.group_lens.iter(),
+        }
+    }
+}
+
+pub struct SearchMatchedGroups<'a> {
+    bytes: &'a [u32],
+    lens: std::slice::Iter<'a, u32>,
+}
+
+impl<'a> Iterator for SearchMatchedGroups<'a> {
+    type Item = &'a [u32];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let len = *self.lens.next()? as usize;
+        let (group, rest) = self.bytes.split_at(len);
+        self.bytes = rest;
+        Some(group)
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct MatchData {
