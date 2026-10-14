@@ -2,6 +2,9 @@ use anyhow::{Result, anyhow, bail};
 use egui::Modifiers;
 use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
+use memoni::atspi_caret_tracker::{self, AtspiCaretTracker, CaretTrackerEvent};
+use memoni::config::{Config, WindowPositionMode};
+use memoni::keymap_action::KeymapAction;
 use memoni::keymap_spec::{KeyAction, PasteModifier, PointerAction, SimpleScrollAction};
 use memoni::persistence::Persistence;
 use memoni::search::Search;
@@ -11,10 +14,9 @@ use memoni::ui::{Ui, UiFlow};
 use memoni::x11_key_converter::X11KeyConverter;
 use memoni::x11_window::X11Window;
 use memoni::{AppMode, ordered_hash_map::OrderedHashMapView};
-use memoni::{config::Config, keymap_action::KeymapAction};
 use memoni::{input::Input, utils::x11_cursor_name};
 use memoni::{opengl_context::OpenGLContext, selection::SelectionType};
-use mio::unix::SourceFd;
+use mio::{Waker, unix::SourceFd};
 use signal_hook::consts::TERM_SIGNALS;
 use signal_hook_mio::v1_0::Signals;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -25,6 +27,7 @@ use std::{
     os::fd::{AsFd as _, AsRawFd as _},
     path::Path,
     process::Stdio,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use x11rb::connection::Connection;
@@ -38,6 +41,7 @@ const SIGNAL_TOKEN: mio::Token = mio::Token(1);
 const MEMONI_TOKEN: mio::Token = mio::Token(2);
 const KEYBOARD_GRAB_RETRY_TOKEN: mio::Token = mio::Token(3);
 const POINTER_GRAB_RETRY_TOKEN: mio::Token = mio::Token(4);
+const ATSPI_TOKEN: mio::Token = mio::Token(5);
 
 enum Args {
     Client(ClientArgs),
@@ -249,27 +253,42 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
         ui.build_button_widget(item)?;
     }
 
-    let (mut poll, socket_listener, mut signals, keyboard_grab_timer, pointer_grab_timer) =
-        match create_poll(&window.conn, socket_path) {
-            Ok(res) => res,
-            Err(err) => {
-                if let Some(io_err) = err.downcast_ref::<io::Error>()
-                    && io_err.kind() == io::ErrorKind::AddrInUse
-                {
-                    eprintln!(
-                        "Error: another server for selection \"{}\"{} is already running",
-                        args.selection,
-                        display_id
-                            .map(|id| format!(" on display {:?}", id))
-                            .unwrap_or_default()
-                    );
-                    std::process::exit(1);
-                } else {
-                    return Err(err);
-                }
+    let text_caret_tracking_enabled = config
+        .window_position_mode
+        .contains(&WindowPositionMode::TextCaret);
+    let (
+        mut poll,
+        socket_listener,
+        mut signals,
+        keyboard_grab_timer,
+        pointer_grab_timer,
+        caret_tracker_channel,
+    ) = match create_poll(&window.conn, socket_path, text_caret_tracking_enabled) {
+        Ok(res) => res,
+        Err(err) => {
+            if let Some(io_err) = err.downcast_ref::<io::Error>()
+                && io_err.kind() == io::ErrorKind::AddrInUse
+            {
+                eprintln!(
+                    "Error: another server for selection \"{}\"{} is already running",
+                    args.selection,
+                    display_id
+                        .map(|id| format!(" on display {:?}", id))
+                        .unwrap_or_default()
+                );
+                std::process::exit(1);
+            } else {
+                return Err(err);
             }
-        };
+        }
+    };
     let mut poll_events = mio::Events::with_capacity(8);
+
+    if let Some(channel) = &caret_tracker_channel
+        && let Err(err) = AtspiCaretTracker::new(channel.clone())
+    {
+        warn!("AT-SPI cannot be initiated: {err:?}");
+    }
 
     let main_loop_result = (|| -> Result<()> {
         let mut window_shown = false;
@@ -349,6 +368,22 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                         pointer_grab_timer.clear_event()?;
                         window.grab_pointer(&pointer_grab_timer)?;
                     }
+                    ATSPI_TOKEN if let Some(channel) = &caret_tracker_channel => {
+                        if let Some(event) = channel.take() {
+                            match event {
+                                CaretTrackerEvent::CaretPosition { x, y, caret_height } => {
+                                    window.set_text_caret(x, y, caret_height)
+                                }
+                                CaretTrackerEvent::NoCaret => {
+                                    window.clear_text_caret();
+                                }
+                                CaretTrackerEvent::Error(err) => {
+                                    warn!("received caret tracker error: {err}");
+                                    window.clear_text_caret();
+                                }
+                            }
+                        }
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -381,6 +416,15 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 {
                     key_converter.update_mapping()?;
                     continue;
+                }
+
+                if text_caret_tracking_enabled
+                    && let Event::PropertyNotify(ev) = event
+                    && ev.window == window.screen.root
+                    && ev.atom == window.atoms._NET_ACTIVE_WINDOW
+                {
+                    debug!("active window changed");
+                    window.clear_text_caret();
                 }
 
                 if let Event::ButtonPress(_) = event {
@@ -718,15 +762,18 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     main_loop_result
 }
 
+#[allow(clippy::type_complexity)]
 fn create_poll<P: AsRef<Path> + std::fmt::Debug>(
     conn: &XCBConnection,
     socket_path: P,
+    atspi_enabled: bool,
 ) -> Result<(
     mio::Poll,
     UnixListener,
     Signals,
     TimerfdSource,
     TimerfdSource,
+    Option<Arc<atspi_caret_tracker::EventChannel<CaretTrackerEvent>>>,
 )> {
     let poll = mio::Poll::new()?;
 
@@ -781,11 +828,22 @@ fn create_poll<P: AsRef<Path> + std::fmt::Debug>(
         mio::Interest::READABLE,
     )?;
 
+    let caret_tracker_channel = if atspi_enabled {
+        debug!("registering AT-SPI caret tracker's slot and waker");
+        Some(Arc::new(atspi_caret_tracker::EventChannel {
+            slot: Mutex::new(None),
+            waker: Waker::new(poll.registry(), ATSPI_TOKEN)?,
+        }))
+    } else {
+        None
+    };
+
     Ok((
         poll,
         listener,
         signals,
         keyboard_grab_timer,
         pointer_grab_timer,
+        caret_tracker_channel,
     ))
 }

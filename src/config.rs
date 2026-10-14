@@ -428,6 +428,7 @@ pub enum WindowPositionMode {
     Monitor,
     Pointer,
     ActivePointer,
+    TextCaret,
 }
 
 #[derive(Deserialize)]
