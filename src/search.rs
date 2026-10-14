@@ -180,6 +180,8 @@ impl Search {
                         self.state.invalid_regex = false;
                         re
                     }
+                    // Clear the matches on regex error but not the visible_ids, so that
+                    // the view doesn't change while in the middle of typing a regex query
                     Err(err) => {
                         debug!("invalid search regex query {:?}: {err}", self.query);
                         self.state.invalid_regex = true;
