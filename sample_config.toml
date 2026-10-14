@@ -40,12 +40,16 @@ show_quick_paste_hint = true
 #   "monitor"        - Center in the focused monitor
 #   "pointer"        - Follow the mouse pointer
 #   "active_pointer" - Follow pointer if it's visible and in the focused monitor
+#   "text_caret"     - Follow text caret of the currently focused input field
 #
-# Example: `["active_pointer", "monitor"]` follows the pointer when possible,
-# otherwise centers in the focused monitor.
+# Example:
+# - `["active_pointer", "monitor"]` follows the pointer when possible,
+#   otherwise centers in the focused monitor.
+# - `["text_caret", "monitor"]` follows the text caret if there's a focused input field,
+#   otherwise centers in the focused monitor.
 #
 # default: CLIPBOARD - ["monitor"], PRIMARY - ["pointer"]
-window_position_mode = ["active_pointer", "monitor"]
+window_position_mode = ["text_caret", "monitor"]
 
 # Window classes that need middle-click paste delay
 #

@@ -28,6 +28,7 @@ x11rb::atom_manager! {
         _NET_WM_PID,
         _NET_WM_STATE,
         _NET_WM_STATE_ABOVE,
+        _NET_ACTIVE_WINDOW,
     }
 }
 
@@ -48,6 +49,7 @@ pub struct X11Window<'a> {
     pub selection_type: SelectionType,
     pub dimensions: Dimensions,
     pub win_opened_pointer: Cell<(i16, i16, Option<Window>)>,
+    pub text_caret: Cell<Option<(i32, i32, i32)>>,
     config: &'a Config,
     shown_win_event_mask: EventMask,
     hidden_win_event_mask: EventMask,
@@ -92,6 +94,7 @@ impl<'a> X11Window<'a> {
             hidden_win_event_mask,
             win_pos: Cell::new((0, 0)),
             win_opened_pointer: Cell::new((0, 0, None)),
+            text_caret: Cell::new(None),
             win_placed_above_pointer: Cell::new(false),
             keyboard_grab_retry_count: Cell::new(0),
             pointer_grab_retry_count: Cell::new(0),
@@ -230,6 +233,13 @@ impl<'a> X11Window<'a> {
         .check()?;
         conn.flush()?;
 
+        conn.change_window_attributes(
+            screen.root,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        )?
+        .check()?;
+        conn.flush()?;
+
         Ok(())
     }
 
@@ -259,6 +269,16 @@ impl<'a> X11Window<'a> {
         );
 
         Ok(())
+    }
+
+    pub fn set_text_caret(&self, x: i32, y: i32, caret_height: i32) {
+        debug!("updating text caret position: ({x}, {y}), caret height: {caret_height}");
+        self.text_caret.set(Some((x, y, caret_height)));
+    }
+
+    pub fn clear_text_caret(&self) {
+        debug!("clearing text caret position and height");
+        self.text_caret.set(None);
     }
 
     pub fn show_window(&self) -> Result<()> {
@@ -427,6 +447,7 @@ impl<'a> X11Window<'a> {
             screen,
             atoms,
             win_opened_pointer,
+            text_caret,
             config,
             ..
         } = self;
@@ -461,6 +482,17 @@ impl<'a> X11Window<'a> {
             })
         });
 
+        debug!(
+            "monitors: {:?}, pointer monitor: {:?}, focused monitors: {:?}",
+            monitors
+                .monitors
+                .iter()
+                .map(|m| (m.x, m.y, m.width, m.height))
+                .collect::<Vec<_>>(),
+            pointer_monitor.map(|m| (m.x, m.y, m.width, m.height)),
+            focused_monitor.map(|m| (m.x, m.y, m.width, m.height)),
+        );
+
         for (position_mode, is_fallback) in config
             .window_position_mode
             .iter()
@@ -473,7 +505,7 @@ impl<'a> X11Window<'a> {
                 }
                 WindowPositionMode::Pointer => Self::position_by_location(
                     &monitors.monitors,
-                    (px, py),
+                    (px, py, px, py),
                     width,
                     height,
                     pointer_gap,
@@ -488,7 +520,7 @@ impl<'a> X11Window<'a> {
                     if pointer_visible && pointer_in_focused_monitor {
                         Self::position_by_location(
                             &monitors.monitors,
-                            (px, py),
+                            (px, py, px, py),
                             width,
                             height,
                             pointer_gap,
@@ -502,6 +534,17 @@ impl<'a> X11Window<'a> {
                         })
                     }
                 }
+                WindowPositionMode::TextCaret => match text_caret.get() {
+                    Some((x, y, caret_height)) => Self::position_by_location(
+                        &monitors.monitors,
+                        (x, y, x, y + caret_height),
+                        width,
+                        height,
+                        pointer_gap,
+                        screen_edge_gap,
+                    ),
+                    None => Err(anyhow!("no text caret available")),
+                },
             };
 
             match position_result {
@@ -553,19 +596,23 @@ impl<'a> X11Window<'a> {
 
     fn position_by_location(
         monitors: &[randr::MonitorInfo],
-        (x, y): (i32, i32),
+        (x1, y1, x2, y2): (i32, i32, i32, i32),
         win_width: i32,
         win_height: i32,
         location_gap: i32,
         monitor_edge_gap: i32,
     ) -> Result<(i16, i16, bool)> {
         let Some(monitor) = monitors.iter().find(|m| {
-            x >= m.x as i32
-                && x < m.x as i32 + m.width as i32
-                && y >= m.y as i32
-                && y < m.y as i32 + m.height as i32
+            x1 >= m.x as i32
+                && x1 < m.x as i32 + m.width as i32
+                && y1 >= m.y as i32
+                && y1 < m.y as i32 + m.height as i32
+                && x2 >= m.x as i32
+                && x2 < m.x as i32 + m.width as i32
+                && y2 >= m.y as i32
+                && y2 < m.y as i32 + m.height as i32
         }) else {
-            bail!("location ({x}, {y}) is outside of all monitors");
+            bail!("location (({x1}, {y1}), ({x2}, {y2})) is outside of all monitors");
         };
         let (mx, my, mw, mh) = (
             monitor.x as i32,
@@ -579,19 +626,22 @@ impl<'a> X11Window<'a> {
         let min_y = my + monitor_edge_gap;
         let max_y = (my + mh - win_height - monitor_edge_gap).max(min_y);
 
-        let place_right = x + win_width + location_gap <= mx + mw - location_gap;
-        let place_below = y + win_height + location_gap <= my + mh - location_gap;
+        let (x1, x2) = (x1.min(x2), x1.max(x2));
+        let (y1, y2) = (y1.min(y2), y1.max(y2));
+
+        let place_right = x2 + location_gap + win_width <= max_x + win_width;
+        let place_below = y2 + location_gap + win_height <= max_y + win_height;
 
         let x = (if place_right {
-            x + location_gap
+            x2 + location_gap
         } else {
-            x - win_width - location_gap
+            x1 - win_width - location_gap
         })
         .clamp(min_x, max_x);
         let y = (if place_below {
-            y + location_gap
+            y2 + location_gap
         } else {
-            y - win_height - location_gap
+            y1 - win_height - location_gap
         })
         .clamp(min_y, max_y);
 
