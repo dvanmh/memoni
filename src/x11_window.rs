@@ -454,6 +454,7 @@ impl<'a> X11Window<'a> {
         let LayoutConfig {
             window_dimensions,
             pointer_gap,
+            clamped_pointer_gap,
             screen_edge_gap,
             ..
         } = config.layout;
@@ -508,7 +509,7 @@ impl<'a> X11Window<'a> {
                     (px, py, px, py),
                     width,
                     height,
-                    pointer_gap,
+                    (pointer_gap, clamped_pointer_gap),
                     screen_edge_gap,
                 ),
                 WindowPositionMode::ActivePointer => {
@@ -523,7 +524,7 @@ impl<'a> X11Window<'a> {
                             (px, py, px, py),
                             width,
                             height,
-                            pointer_gap,
+                            (pointer_gap, clamped_pointer_gap),
                             screen_edge_gap,
                         )
                     } else {
@@ -540,7 +541,7 @@ impl<'a> X11Window<'a> {
                         (x, y, x, y + caret_height),
                         width,
                         height,
-                        pointer_gap,
+                        (pointer_gap, clamped_pointer_gap),
                         screen_edge_gap,
                     ),
                     None => Err(anyhow!("no text caret available")),
@@ -599,7 +600,7 @@ impl<'a> X11Window<'a> {
         (x1, y1, x2, y2): (i32, i32, i32, i32),
         win_width: i32,
         win_height: i32,
-        location_gap: i32,
+        (gap, clamped_gap): (i32, i32),
         monitor_edge_gap: i32,
     ) -> Result<(i16, i16, bool)> {
         let Some(monitor) = monitors.iter().find(|m| {
@@ -629,26 +630,44 @@ impl<'a> X11Window<'a> {
         let (x1, x2) = (x1.min(x2), x1.max(x2));
         let (y1, y2) = (y1.min(y2), y1.max(y2));
 
-        let place_right = x2 + location_gap + win_width <= max_x + win_width;
-        let place_below = y2 + location_gap + win_height <= max_y + win_height;
+        let clamp_x = |v: i32| v.clamp(min_x, max_x);
+        let clamp_y = |v: i32| v.clamp(min_y, max_y);
 
-        let x = (if place_right {
-            x2 + location_gap
+        let place = |gap: i32| {
+            let place_right = x2 + gap + win_width <= max_x + win_width;
+            let place_below = y2 + gap + win_height <= max_y + win_height;
+
+            let unclamped_x = if place_right {
+                x2 + gap
+            } else {
+                x1 - win_width - gap
+            };
+            let unclamped_y = if place_below {
+                y2 + gap
+            } else {
+                y1 - win_height - gap
+            };
+
+            (
+                clamp_x(unclamped_x),
+                clamp_y(unclamped_y),
+                unclamped_x != clamp_x(unclamped_x) || unclamped_y != clamp_y(unclamped_y),
+                !place_below,
+            )
+        };
+
+        let (x, y, clamped, above) = place(gap);
+        let (x, y, above) = if clamped {
+            let (x, y, _, above) = place(clamped_gap);
+            (x, y, above)
         } else {
-            x1 - win_width - location_gap
-        })
-        .clamp(min_x, max_x);
-        let y = (if place_below {
-            y2 + location_gap
-        } else {
-            y1 - win_height - location_gap
-        })
-        .clamp(min_y, max_y);
+            (x, y, above)
+        };
 
         Ok((
             x.clamp(i16::MIN.into(), i16::MAX.into()) as i16,
             y.clamp(i16::MIN.into(), i16::MAX.into()) as i16,
-            !place_below,
+            above,
         ))
     }
 }

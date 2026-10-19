@@ -161,6 +161,14 @@ scroll_bar_margin = 0
 # default: 5
 pointer_gap = 2
 
+# Like `pointer_gap`, but used when the placement is clamped to the screen edges
+# (e.g. pointer near a screen side/corner). Useful when a small `pointer_gap` is
+# wanted for the open placement but looks cramped when the window is pinned at
+# the screen edge.
+#
+# default: 5
+clamped_pointer_gap = 8
+
 # Minimum distance (px) from screen edges when positioning the window
 #
 # default: 10

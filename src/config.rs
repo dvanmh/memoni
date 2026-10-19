@@ -95,6 +95,7 @@ pub struct LayoutConfig {
     pub button_spacing: f32,
     pub scroll_bar_margin: f32,
     pub pointer_gap: i32,
+    pub clamped_pointer_gap: i32,
     pub screen_edge_gap: i32,
     pub preview_size: Dimensions,
     pub ribbon_size: f32,
@@ -122,6 +123,7 @@ impl Default for LayoutConfig {
             button_spacing: 5.0,
             scroll_bar_margin: 8.0,
             pointer_gap: 5,
+            clamped_pointer_gap: 5,
             screen_edge_gap: 10,
             preview_size: Dimensions {
                 width: 105,
