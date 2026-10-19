@@ -4,11 +4,13 @@ use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
 use memoni::atspi_caret_tracker::{self, AtspiCaretTracker, CaretTrackerEvent};
 use memoni::config::{Config, WindowPositionMode};
+use memoni::item_list::ItemList;
 use memoni::keymap_action::KeymapAction;
 use memoni::keymap_spec::{KeyAction, PasteModifier, PointerAction, SimpleScrollAction};
+use memoni::paste::PasteServer;
 use memoni::persistence::Persistence;
 use memoni::search::Search;
-use memoni::selection::Selection;
+use memoni::selection::{EventHandlingResult, Selection};
 use memoni::timerfd_source::TimerfdSource;
 use memoni::ui::{Ui, UiFlow};
 use memoni::x11_key_converter::X11KeyConverter;
@@ -238,18 +240,20 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     let mut search = Search::new();
 
     let persistence = Persistence::new(args.selection, &display_id)?;
+    let (history, mut bookmarks) = persistence.load_selection_data()?;
     let mut selection = Selection::new(
-        persistence.load_selection_data()?,
+        history,
         &window,
-        &key_converter,
         args.selection,
         &config,
         // XFixes sends a SelectionNotify for each change while the user drags the mouse to adjust selection.
         // Debounce to merge consecutive items with similar text.
         args.selection == SelectionType::PRIMARY,
     )?;
+    let mut paster = PasteServer::new(&window, &key_converter, args.selection, &config)?;
+
     let mut ui = Ui::new(&config)?;
-    for (_, item) in &selection.items {
+    for (_, item) in selection.history.iter().chain(bookmarks.iter()) {
         ui.build_button_widget(item)?;
     }
 
@@ -293,7 +297,8 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     let main_loop_result = (|| -> Result<()> {
         let mut window_shown = false;
         let mut pointer_button_press_count = 0;
-        let mut active_id = selection.get_first_unpinned_item();
+        let mut bookmark_view = false;
+        let mut active_id = selection.history.first_unpinned_id();
         let mut mode = AppMode::Normal;
         let mut prev_mode = mode;
         let mut first_loop = true;
@@ -404,7 +409,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
 
                     input = Input::new(&window, &key_converter)?;
                     ui.reset_context();
-                    for (_, item) in &selection.items {
+                    for (_, item) in selection.history.iter().chain(bookmarks.iter()) {
                         ui.build_button_widget(item)?;
                     }
 
@@ -444,23 +449,49 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 }
 
                 input.handle_event(&event, mode == AppMode::Search)?;
-                if let Some((new_selection_item, removed_selection_items)) =
-                    selection.handle_event(&event)?
-                {
-                    ui.remove_button_widgets(removed_selection_items);
-                    if let Some(new_item) = new_selection_item {
-                        ui.build_button_widget(new_item)?;
-                    }
+                if !paster.handle_event(&event)? {
+                    match selection.handle_event(&event)? {
+                        EventHandlingResult::HistoryUpdated {
+                            added: new_item_id,
+                            removed,
+                        } => {
+                            if let Some(new_item_id) = new_item_id
+                                && let Some(item) = selection.history.get(new_item_id)
+                            {
+                                ui.build_button_widget(item)?;
+                            }
+                            ui.remove_button_widgets(
+                                removed
+                                    .into_iter()
+                                    .filter(|item| !bookmarks.contains(item.id())),
+                            );
 
-                    if mode == AppMode::Search {
-                        search.refresh(&selection.items);
-                        ui.invalidate_text_caches();
-                        active_id = search.visible_ids.first().copied().unwrap_or(0);
-                        ui.reset_scroll_offset();
-                    }
+                            if mode == AppMode::Search && !bookmark_view {
+                                search.refresh(
+                                    active_list(&selection, &bookmarks, bookmark_view).items(),
+                                );
+                                ui.invalidate_text_caches();
+                                active_id = search.visible_ids.first().copied().unwrap_or(0);
+                                ui.reset_scroll_offset();
+                            }
 
-                    persistence.save_selection_data(&selection.items, &selection.metadata)?;
-                    items_updated = true;
+                            persistence.save_selection_data(&selection.history, &bookmarks)?;
+                            items_updated = true;
+                        }
+                        EventHandlingResult::SelectionOwnerDied => {
+                            let id = selection.history.first_unpinned_id();
+                            if id == 0 {
+                                debug!(
+                                    "selection owner died but no items to serve, leaving selection cleared"
+                                );
+                            } else {
+                                info!("selection owner died, taking over ownership with item {id}");
+                                let item = selection.history.get(id).unwrap();
+                                paster.claim_selection_ownership(item.data().clone())?;
+                            }
+                        }
+                        EventHandlingResult::None => {}
+                    }
                 }
             }
 
@@ -476,11 +507,12 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
 
             if will_show_window {
                 mode = AppMode::Normal;
+                bookmark_view = false;
                 window.update_window_pos()?;
                 input.update_pointer_pos()?;
                 ui.reset();
                 search.reset();
-                active_id = selection.get_first_unpinned_item();
+                active_id = selection.history.first_unpinned_id();
             }
 
             if first_loop || items_updated || window_shown || will_show_window {
@@ -501,41 +533,90 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                         }
                         KeyAction::Scroll(scroll_action) => scroll_actions.push(scroll_action),
                         KeyAction::Remove => {
-                            let is_pinned = selection
-                                .items
-                                .get(&active_id)
-                                .is_some_and(|item| item.is_pinned());
-                            if is_pinned {
+                            let active_list =
+                                active_list_mut(&mut selection, &mut bookmarks, bookmark_view);
+                            if active_list.is_pinned(active_id) {
                                 info!("ignoring remove action on pinned item {active_id}");
                                 ui.show_error("Cannot remove pinned item");
                             } else {
-                                let removed_item = selection.items.remove(&active_id);
-                                if let Some(item) = removed_item {
+                                let removed_item = active_list.remove(active_id);
+                                if let Some(item) = removed_item
+                                    && !selection.history.contains(item.id())
+                                    && !bookmarks.contains(item.id())
+                                {
                                     ui.remove_button_widgets(std::iter::once(item));
                                 }
-                                info!("selection item {active_id} removed");
 
                                 if mode == AppMode::Search {
                                     search.remove_id(active_id);
                                 }
 
-                                persistence
-                                    .save_selection_data(&selection.items, &selection.metadata)?;
+                                info!("selection item {active_id} removed");
+                                persistence.save_selection_data(&selection.history, &bookmarks)?;
                             }
                         }
                         KeyAction::Pin => {
-                            let is_pinned = selection.toggle_pin(active_id)?;
+                            let is_pinned =
+                                active_list_mut(&mut selection, &mut bookmarks, bookmark_view)
+                                    .toggle_pin(active_id)?;
                             if is_pinned {
                                 info!("selection item {active_id} pinned");
                             } else {
                                 info!("selection item {active_id} unpinned");
                             }
-                            persistence
-                                .save_selection_data(&selection.items, &selection.metadata)?;
+                            persistence.save_selection_data(&selection.history, &bookmarks)?;
                         }
                         KeyAction::QuickPaste(index, modifier) => {
                             quick_paste_index = Some(index);
                             paste_modifier = modifier;
+                        }
+                        KeyAction::ToggleBookmarkView => {
+                            bookmark_view = !bookmark_view;
+                            info!(
+                                "switching to {} view",
+                                if bookmark_view { "bookmark" } else { "main" }
+                            );
+
+                            if mode == AppMode::Search {
+                                search.refresh(
+                                    active_list(&selection, &bookmarks, bookmark_view).items(),
+                                );
+                                ui.invalidate_text_caches();
+                                active_id = if search.query.is_empty() {
+                                    active_list(&selection, &bookmarks, bookmark_view)
+                                        .first_unpinned_id()
+                                } else {
+                                    search.visible_ids.first().copied().unwrap_or(0)
+                                };
+                            } else {
+                                active_id = active_list(&selection, &bookmarks, bookmark_view)
+                                    .first_unpinned_id();
+                            }
+                            ui.reset_scroll_offset();
+                        }
+                        KeyAction::ToggleBookmark => {
+                            if bookmark_view {
+                                warn!(
+                                    "cannot toggle bookmark in bookmark view, use remove action instead"
+                                );
+                            } else {
+                                if bookmarks.contains(active_id) {
+                                    bookmarks.remove(active_id);
+                                    info!("selection item {active_id} unbookmarked");
+                                } else {
+                                    if let Some(item) = selection.history.get(active_id) {
+                                        bookmarks
+                                            .insert_after_pinned(active_id, item.data().clone());
+                                        info!("selection item {active_id} bookmarked");
+                                    } else {
+                                        warn!(
+                                            "selection item to be bookmarked {active_id} not found"
+                                        );
+                                    };
+                                }
+
+                                persistence.save_selection_data(&selection.history, &bookmarks)?;
+                            }
                         }
 
                         KeyAction::ShowSearch => {
@@ -553,21 +634,24 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                 info!("copying highlighted search text");
                                 let (new_item, removed_items) = selection.insert_text_item(text)?;
 
-                                ui.remove_button_widgets(removed_items);
                                 if let Some(item) = new_item {
                                     ui.build_button_widget(item)?;
-
-                                    let item_id = item.id();
-                                    selection.set_next_paste_item(item_id)?;
+                                    paster.claim_selection_ownership(item.data().clone())?;
                                 }
+                                ui.remove_button_widgets(
+                                    removed_items
+                                        .into_iter()
+                                        .filter(|item| !bookmarks.contains(item.id())),
+                                );
 
-                                search.refresh(&selection.items);
+                                search.refresh(
+                                    active_list(&selection, &bookmarks, bookmark_view).items(),
+                                );
                                 ui.invalidate_text_caches();
                                 active_id = search.visible_ids.first().copied().unwrap_or(0);
                                 ui.reset_scroll_offset();
 
-                                persistence
-                                    .save_selection_data(&selection.items, &selection.metadata)?;
+                                persistence.save_selection_data(&selection.history, &bookmarks)?;
                             }
                         }
                         KeyAction::SwitchIme => match &config.switch_ime_command {
@@ -624,7 +708,8 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                             AppMode::Search => {
                                 info!("exiting search mode");
                                 if !search.query.is_empty() {
-                                    active_id = selection.get_first_unpinned_item();
+                                    active_id = active_list(&selection, &bookmarks, bookmark_view)
+                                        .first_unpinned_id();
                                     ui.invalidate_text_caches();
                                     ui.reset_scroll_offset();
                                 }
@@ -639,15 +724,18 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                 }
 
                 if mode != prev_mode && mode == AppMode::Search {
-                    search.refresh(&selection.items);
+                    search.refresh(active_list(&selection, &bookmarks, bookmark_view).items());
                     ui.invalidate_text_caches();
                 }
 
                 let selection_items_view = match mode {
-                    AppMode::Search => {
-                        OrderedHashMapView::new(&selection.items.map, &search.visible_ids)
-                    }
-                    _ => selection.items.to_view(),
+                    AppMode::Search => OrderedHashMapView::new(
+                        &active_list(&selection, &bookmarks, bookmark_view)
+                            .items()
+                            .map,
+                        &search.visible_ids,
+                    ),
+                    _ => active_list(&selection, &bookmarks, bookmark_view).to_view(),
                 };
 
                 let quick_paste_base = ui.quick_paste_base_idx();
@@ -679,6 +767,8 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     &mut keymap_action.pending_keys,
                     &mut search.query,
                     &search.state,
+                    bookmark_view,
+                    bookmarks.items(),
                 )?;
 
                 if let Some(clicked_id) = clicked_item {
@@ -728,15 +818,25 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
             }
 
             if let Some(id) = paste_item_id {
-                selection.paste(id, window.win_opened_pointer.get(), paste_modifier)?;
-                persistence.save_selection_data(&selection.items, &selection.metadata)?;
+                let active_list = active_list_mut(&mut selection, &mut bookmarks, bookmark_view);
+                if let Some(item) = active_list.get(id) {
+                    paster.paste(
+                        item.data().clone(),
+                        window.win_opened_pointer.get(),
+                        paste_modifier,
+                    )?;
+                    active_list.move_after_pinned_if_unpinned(id);
+                    persistence.save_selection_data(&selection.history, &bookmarks)?;
+                } else {
+                    warn!("paste item {id} not found");
+                }
             }
 
             if mode == AppMode::Search && (search.query_changed() || search.mode_changed()) {
-                search.refresh(&selection.items);
+                search.refresh(active_list(&selection, &bookmarks, bookmark_view).items());
                 ui.invalidate_text_caches();
                 active_id = if search.query.is_empty() {
-                    selection.get_first_unpinned_item()
+                    active_list(&selection, &bookmarks, bookmark_view).first_unpinned_id()
                 } else {
                     search.visible_ids.first().copied().unwrap_or(0)
                 };
@@ -760,6 +860,30 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     fs::remove_file(socket_path)?;
 
     main_loop_result
+}
+
+fn active_list<'m>(
+    selection: &'m Selection,
+    bookmarks: &'m ItemList,
+    bookmark_view: bool,
+) -> &'m ItemList {
+    if bookmark_view {
+        bookmarks
+    } else {
+        &selection.history
+    }
+}
+
+fn active_list_mut<'m>(
+    selection: &'m mut Selection,
+    bookmarks: &'m mut ItemList,
+    bookmark_view: bool,
+) -> &'m mut ItemList {
+    if bookmark_view {
+        bookmarks
+    } else {
+        &mut selection.history
+    }
 }
 
 #[allow(clippy::type_complexity)]

@@ -11,10 +11,10 @@ use std::{
 use anyhow::{Result, anyhow};
 use egui::{
     Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak,
-    FullOutput, Id, LayerId, Order, Pos2, RawInput, Rect, Stroke, TextureHandle, TextureOptions,
-    Vec2,
+    FullOutput, Id, LayerId, Mesh, Order, Pos2, RawInput, Rect, Stroke, StrokeKind, TextureHandle,
+    TextureOptions, Vec2,
     emath::GuiRounding as _,
-    epaint,
+    epaint::{self, ColorMode, PathStroke},
     scroll_area::{DragScroll, ScrollSource},
     text_selection,
     widgets::text_edit::TextEditState,
@@ -31,7 +31,7 @@ use crate::{
     ext::RectExt as _,
     freedesktop_cache::get_cached_thumbnail,
     keymap_spec::{KeyChord, ScrollAction},
-    ordered_hash_map::OrderedHashMapView,
+    ordered_hash_map::{OrderedHashMap, OrderedHashMapView},
     search::{SearchMatch, SearchMatchedBytes, SearchMode, SearchState},
     selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
@@ -353,6 +353,8 @@ impl<'a> Ui<'a> {
         pending_keys: &mut Vec<KeyChord>,
         search_query: &mut String,
         search_state: &SearchState,
+        bookmark_view: bool,
+        bookmarks: &OrderedHashMap<u64, SelectionItem>,
     ) -> Result<(FullOutput, Option<u64>)> {
         trace!("painting ui with flow {flow:?}");
 
@@ -440,6 +442,10 @@ impl<'a> Ui<'a> {
                 .show(ui, |ui| {
                     self.ribbon(ui, flow);
 
+                    if bookmark_view {
+                        self.bookmark_ribbon(ui);
+                    }
+
                     self.scroll_area(ui, flow, *active_id, scroll_offset, scrolloff, |sf, ui, current_offset| -> Result<()> {
                         let quick_paste_base = sf.compute_quick_paste_base_idx(
                             flow,
@@ -453,6 +459,8 @@ impl<'a> Ui<'a> {
                         if selection_items.is_empty() {
                             let message = if mode == AppMode::Search && !is_search_empty {
                                 "No matching items."
+                            } else if bookmark_view {
+                                "No bookmarks yet."
                             } else {
                                 "Your clipboard history will appear here."
                             };
@@ -468,6 +476,7 @@ impl<'a> Ui<'a> {
                         for (i, (&id, item)) in item_it {
                             let is_active = id == *active_id;
                             let is_pinned = item.is_pinned();
+                            let is_bookmarked = !bookmark_view && bookmarks.contains_key(&id);
 
                             let btn_widget = sf.button_widgets.get_mut(&item.id()).ok_or_else(
                                 || anyhow!("missing button widget for item {}", item.id()),
@@ -475,7 +484,8 @@ impl<'a> Ui<'a> {
 
                             let mut state = ClipboardButtonState::default()
                                 .is_active(is_active)
-                                .is_pinned(is_pinned);
+                                .is_pinned(is_pinned)
+                                .is_bookmarked(is_bookmarked);
                             if sf.config.show_quick_paste_hint
                                 && (quick_paste_base..quick_paste_base + 10).contains(&i)
                             {
@@ -1028,6 +1038,50 @@ impl<'a> Ui<'a> {
         ));
     }
 
+    fn bookmark_ribbon(&self, ui: &egui::Ui) {
+        let window: Vec2 = self.config.layout.window_dimensions.into();
+        let color: Color32 = self.config.theme.bookmark_ribbon.into();
+        let rect = ui.min_rect();
+        let border = 10.0;
+
+        let x = rect.left() + window.x / 12.0;
+        let y = rect.top();
+        let w = window.x / 3.5;
+        let h = window.y / 3.25;
+        let mid_x = x + w / 2.0;
+        let mid_y = y + h * 0.75;
+
+        let mut mesh = Mesh::default();
+        for pos in [
+            egui::pos2(x, y),
+            egui::pos2(x + w, y),
+            egui::pos2(x + w, y + h),
+            egui::pos2(mid_x, mid_y),
+            egui::pos2(x, y + h),
+        ] {
+            mesh.colored_vertex(pos, color);
+        }
+        for [a, b, c] in [[0, 1, 2], [0, 2, 3], [0, 3, 4]] {
+            mesh.add_triangle(a, b, c);
+        }
+        ui.painter().add(mesh);
+
+        ui.painter().add(egui::Shape::closed_line(
+            vec![
+                egui::pos2(x, y - border),
+                egui::pos2(x + w, y - border),
+                egui::pos2(x + w, y + h),
+                egui::pos2(mid_x, mid_y),
+                egui::pos2(x, y + h),
+            ],
+            PathStroke {
+                width: border,
+                color: ColorMode::Solid(Color32::from_white_alpha(10)),
+                kind: StrokeKind::Inside,
+            },
+        ));
+    }
+
     fn pending_keys_overlay(&self, ui: &egui::Ui, pending_keys: &[KeyChord], flow: UiFlow) {
         if pending_keys.is_empty() {
             return;
@@ -1291,6 +1345,14 @@ impl<'a> Ui<'a> {
     }
 
     pub fn build_button_widget(&mut self, item: &SelectionItem) -> Result<()> {
+        if self.button_widgets.contains_key(&item.id()) {
+            trace!(
+                "button widget with id {} already exists, skipping building",
+                item.id()
+            );
+            return Ok(());
+        }
+
         trace!("building button widget for item {}", item.id());
         let Ui {
             egui_ctx: ctx,
@@ -1349,6 +1411,8 @@ impl<'a> Ui<'a> {
             .muted_color(config.theme.muted_foreground)
             .pin_size(config.layout.pin_size)
             .pin_color(config.theme.pin_color)
+            .bookmark_size(config.layout.bookmark_size)
+            .bookmark_color(config.theme.bookmark_color)
             .color_preview_size(config.layout.color_preview_size)
             .color_preview_corner_radius(config.layout.color_preview_corner_radius)
             .color_preview_background(self.color_preview_background_texture.clone());

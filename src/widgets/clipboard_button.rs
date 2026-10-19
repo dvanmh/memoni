@@ -2,8 +2,8 @@ use std::{mem, range::Range, sync::Arc};
 
 use crate::search::{SearchMatchedBytes, SearchMatchedGroups};
 use egui::{
-    Color32, CornerRadius, FontId, Galley, Image, Pos2, Rect, Response, RichText, Sense, Stroke,
-    StrokeKind, TextFormat, TextStyle, TextWrapMode, TextureHandle, Ui, UiBuilder, Vec2,
+    Color32, CornerRadius, FontId, Galley, Image, Mesh, Pos2, Rect, Response, RichText, Sense,
+    Stroke, StrokeKind, TextFormat, TextStyle, TextWrapMode, TextureHandle, Ui, UiBuilder, Vec2,
     WidgetText,
     text::{ByteIndex, LayoutJob, LayoutSection},
 };
@@ -38,6 +38,8 @@ pub struct ClipboardButton {
 
     pin_size: f32,
     pin_color: Color32,
+    bookmark_size: Vec2,
+    bookmark_color: Color32,
 
     color_preview: Option<Color32>,
     color_preview_size: f32,
@@ -181,6 +183,18 @@ impl ClipboardButton {
     }
 
     #[inline]
+    pub fn bookmark_size(mut self, bookmark_size: impl Into<Vec2>) -> Self {
+        self.bookmark_size = bookmark_size.into();
+        self
+    }
+
+    #[inline]
+    pub fn bookmark_color(mut self, bookmark_color: impl Into<Color32>) -> Self {
+        self.bookmark_color = bookmark_color.into();
+        self
+    }
+
+    #[inline]
     pub fn color_preview(mut self, color_preview: impl Into<Color32>) -> Self {
         self.color_preview = Some(color_preview.into());
         self
@@ -227,6 +241,7 @@ impl ClipboardButton {
             |ui| {
                 let is_active = state.is_active;
                 let is_pinned = state.is_pinned;
+                let is_bookmarked = state.is_bookmarked;
                 let keyboard_hint = state.keyboard_hint;
                 let matches = state.matches.as_ref();
                 let raw = state.raw.as_ref();
@@ -557,6 +572,40 @@ impl ClipboardButton {
                         let pin_center = rect.min + Vec2::splat(self.pin_size / 2.0);
                         ui.painter()
                             .circle_filled(pin_center, self.pin_size, self.pin_color);
+                    }
+
+                    if is_bookmarked {
+                        let size = self.bookmark_size;
+                        let origin = rect.min
+                            + egui::vec2(
+                                if is_pinned {
+                                    self.pin_size * 2.0 + 2.0
+                                } else {
+                                    ui.style().spacing.button_padding.x
+                                },
+                                0.0,
+                            );
+
+                        let left = origin.x;
+                        let right = origin.x + size.x;
+                        let bottom = origin.y + size.y;
+                        let mid_x = origin.x + size.x / 2.0;
+                        let mid_y = origin.y + size.y * 0.55;
+
+                        let mut mesh = Mesh::default();
+                        for pos in [
+                            egui::pos2(left, origin.y),
+                            egui::pos2(right, origin.y),
+                            egui::pos2(right, bottom),
+                            egui::pos2(mid_x, mid_y),
+                            egui::pos2(left, bottom),
+                        ] {
+                            mesh.colored_vertex(pos, self.bookmark_color);
+                        }
+                        for [a, b, c] in [[0, 1, 2], [0, 2, 3], [0, 3, 4]] {
+                            mesh.add_triangle(a, b, c);
+                        }
+                        ui.painter().add(mesh);
                     }
                 }
             },
@@ -1214,6 +1263,7 @@ struct GalleySlice {
 pub struct ClipboardButtonState<'a> {
     is_active: bool,
     is_pinned: bool,
+    is_bookmarked: bool,
     keyboard_hint: Option<&'static str>,
     matches: Option<ButtonTexts<(&'a str, &'a SearchMatchedBytes)>>,
     raw: Option<RawMatch<'a>>,
@@ -1229,6 +1279,12 @@ impl<'a> ClipboardButtonState<'a> {
     #[inline]
     pub fn is_pinned(mut self, is_pinned: bool) -> Self {
         self.is_pinned = is_pinned;
+        self
+    }
+
+    #[inline]
+    pub fn is_bookmarked(mut self, is_bookmarked: bool) -> Self {
+        self.is_bookmarked = is_bookmarked;
         self
     }
 

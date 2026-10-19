@@ -102,6 +102,7 @@ pub struct LayoutConfig {
     pub pending_keys_margin: XY<f32>,
     pub pending_keys_corner_radius: f32,
     pub pin_size: f32,
+    pub bookmark_size: XY<f32>,
     pub show_color_preview: bool,
     pub color_preview_size: f32,
     pub color_preview_corner_radius: u8,
@@ -131,6 +132,7 @@ impl Default for LayoutConfig {
             pending_keys_margin: XY { x: 8.0, y: 8.0 },
             pending_keys_corner_radius: 5.0,
             pin_size: 4.0,
+            bookmark_size: XY { x: 5.0, y: 7.0 },
             show_color_preview: true,
             color_preview_size: 18.0,
             color_preview_corner_radius: 4,
@@ -212,6 +214,10 @@ pub struct ThemeConfig {
     pub search_mode: SearchModeColor,
     #[serde_as(as = "DisplayFromStr")]
     pub search_match: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub bookmark_ribbon: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub bookmark_color: Color,
 }
 
 impl Default for ThemeConfig {
@@ -240,6 +246,8 @@ impl Default for ThemeConfig {
                 regex: Color(0xff6e8bff),
             },
             search_match: Color(0x60d48e4c),
+            bookmark_ribbon: Color(0x55b6150b),
+            bookmark_color: Color(0xffca190c),
         }
     }
 }

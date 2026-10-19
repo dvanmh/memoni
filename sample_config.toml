@@ -199,6 +199,11 @@ pending_keys_corner_radius = 2
 # default: 4
 pin_size = 2
 
+# Size (px) of the bookmarked item indicator
+#
+# default: { x = 5, y = 7 }
+bookmark_size = { x = 6, y = 10 }
+
 # Shows a small preview square for color values on buttons
 #
 # Supported formats:
@@ -364,6 +369,16 @@ search_mode = {
 #
 # default: "#d48e4c60"
 search_match = "#00a5ff80"
+
+# Bookmark ribbon color shown while the bookmark view is active
+#
+# default: "#b6150b55"
+bookmark_ribbon = "#7c15d6ab"
+
+# Bookmarked item indicator color
+#
+# default: "#ca190c"
+bookmark_color = "#a44bf1"
 
 
 # Selection-specific overrides

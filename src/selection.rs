@@ -9,35 +9,25 @@ extern crate x11rb;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
-    fmt, mem, thread,
+    fmt, mem,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context as _, Result, anyhow, bail};
-use bincode::{Decode, Encode};
+use anyhow::{Context as _, Result};
 use log::{debug, error, info, trace, warn};
 use x11rb::protocol::{
     Event,
     xfixes::{SelectionEvent, SelectionEventMask},
     xproto::{ConnectionExt as _, *},
 };
-use x11rb::wrapper::ConnectionExt as _;
-use x11rb::xcb_ffi::XCBConnection;
-use x11rb::{
-    connection::Connection,
-    connection::RequestConnection as _,
-    protocol::{xfixes, xtest::ConnectionExt as _},
-};
-use xkeysym::Keysym;
+use x11rb::{connection::Connection, connection::RequestConnection as _, protocol::xfixes};
 
 use crate::{
-    config::{Config, KeyStroke, Modifier},
-    keymap_spec::PasteModifier,
-    ordered_hash_map::OrderedHashMap,
+    config::Config,
+    item_list::ItemList,
     selection_item::{SelectionData, SelectionItem},
     transfer_window_pool::{TransferWindow, TransferWindowPool},
     utils::{image_mime_score, is_image_mime, is_plaintext_mime, plaintext_mime_score},
-    x11_key_converter::X11KeyConverter,
     x11_window::X11Window,
 };
 
@@ -45,7 +35,6 @@ const HASH_SEED: usize = 0xfd9aadcf54cc0f35;
 const BINCODE_CONFIG: bincode::config::Configuration = bincode::config::standard();
 const OVERDUE_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_INCR_SIZE: usize = 10 * 1024 * 1024;
-const INCR_CHUNK_SIZE: usize = 1024 * 1024 - 1;
 
 x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
@@ -68,11 +57,6 @@ x11rb::atom_manager! {
 
 type Owner = u32;
 
-#[derive(Debug, Default, Encode, Decode)]
-pub struct SelectionMetadata {
-    pub pinned_count: usize,
-}
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SelectionType {
     PRIMARY,
@@ -82,6 +66,17 @@ impl fmt::Display for SelectionType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
+}
+
+#[derive(Debug, Default)]
+pub enum EventHandlingResult {
+    HistoryUpdated {
+        added: Option<u64>,
+        removed: Vec<SelectionItem>,
+    },
+    SelectionOwnerDied,
+    #[default]
+    None,
 }
 
 #[derive(Debug)]
@@ -97,17 +92,6 @@ enum RequestTaskState {
         current_mime_atom: Atom,
         current_mime_name: String,
         buffer: Vec<u8>,
-    },
-}
-
-#[derive(Debug)]
-enum IncrPasteTaskState {
-    TransferingIncr {
-        target: u32,
-        item_id: u64,
-        data_atom_name: String,
-        offset: usize,
-        modifier: Option<PasteModifier>,
     },
 }
 
@@ -134,30 +118,23 @@ impl<S, M> Task<S, M> {
 }
 
 pub struct Selection<'a> {
-    pub items: OrderedHashMap<u64, SelectionItem>,
-    pub metadata: SelectionMetadata,
+    pub history: ItemList,
 
     window: &'a X11Window<'a>,
-    screen: &'a Screen,
-    key_converter: &'a X11KeyConverter<'a>,
     config: &'a Config,
     merge_consecutive_similar_items: bool,
     selection_atom: Atom,
     atoms: Atoms,
     request_tasks: HashMap<Window, Task<RequestTaskState, (Atom, Owner)>>,
-    incr_paste_tasks: HashMap<(Window, Atom), Task<IncrPasteTaskState>>,
     transfer_windows: TransferWindowPool<'a>,
     mime_atoms: RefCell<HashMap<String, Atom>>,
-    paste_item_id: Option<u64>,
-    next_paste_modifier: Option<PasteModifier>,
     prev_item_metadata: Option<(u32, Instant, bool)>,
 }
 
 impl<'a> Selection<'a> {
     pub fn new(
-        initial_data: (OrderedHashMap<u64, SelectionItem>, SelectionMetadata),
+        history: ItemList,
         window: &'a X11Window,
-        key_converter: &'a X11KeyConverter,
         selection_type: SelectionType,
         config: &'a Config,
         merge_consecutive_similar_items: bool,
@@ -181,29 +158,20 @@ impl<'a> Selection<'a> {
         xfixes::select_selection_input(conn, root, selection_atom, event_mask)?;
 
         Ok(Selection {
-            items: initial_data.0,
-            metadata: initial_data.1,
+            history,
             window,
-            screen: &window.screen,
-            key_converter,
             config,
             merge_consecutive_similar_items,
             selection_atom,
             atoms,
             request_tasks: HashMap::new(),
-            incr_paste_tasks: HashMap::new(),
             transfer_windows: TransferWindowPool::new(conn, root, selection_type)?,
             mime_atoms: RefCell::new(HashMap::new()),
-            paste_item_id: None,
-            next_paste_modifier: None,
             prev_item_metadata: None,
         })
     }
 
-    pub fn handle_event(
-        &mut self,
-        event: &Event,
-    ) -> Result<Option<(Option<&SelectionItem>, Vec<SelectionItem>)>> {
+    pub fn handle_event(&mut self, event: &Event) -> Result<EventHandlingResult> {
         let conn = &self.window.conn;
         let paste_window = self.window.win_id.get();
         let atoms = self.atoms;
@@ -254,27 +222,18 @@ impl<'a> Selection<'a> {
                         }
                         SelectionEvent::SELECTION_WINDOW_DESTROY
                         | SelectionEvent::SELECTION_CLIENT_CLOSE => {
-                            let Some((&item_id, _)) =
-                                self.items.get_by_index(self.metadata.pinned_count)
-                            else {
-                                debug!(
-                                    "selection owner died but no items to serve, leaving selection cleared"
-                                );
-                                break 'blk;
-                            };
-
                             info!(
-                                "selection owner died ({:?}), taking over ownership with item {item_id}",
+                                "selection owner died ({:?}), handing over to fallback logic",
                                 ev.subtype
                             );
-                            self.set_next_paste_item(item_id)?;
+                            return Ok(EventHandlingResult::SelectionOwnerDied);
                         }
                         _ => {}
                     }
                 }
                 Event::SelectionNotify(ev) => {
                     if ev.selection != self.selection_atom {
-                        debug!(
+                        trace!(
                             "ignoring selection notification for other selection {:?}",
                             ev.selection
                         );
@@ -283,7 +242,7 @@ impl<'a> Selection<'a> {
 
                     let transfer_window = ev.requestor;
                     let Some(task) = self.request_tasks.get_mut(&transfer_window) else {
-                        warn!(
+                        trace!(
                             "ignoring selection notification to unknown requestor: {transfer_window}",
                         );
                         break 'blk;
@@ -435,9 +394,7 @@ impl<'a> Selection<'a> {
                 }
 
                 // Handle receiving INCR selection
-                Event::PropertyNotify(ev)
-                    if !self.incr_paste_tasks.contains_key(&(ev.window, ev.atom)) =>
-                {
+                Event::PropertyNotify(ev) => {
                     if ev.window == self.window.screen.root {
                         trace!("ignoring root window property change: {:?}", ev.atom);
                         break 'blk;
@@ -539,280 +496,13 @@ impl<'a> Selection<'a> {
                     }
                 }
 
-                // Handle paste request
-                Event::SelectionRequest(ev) => {
-                    debug!(
-                        "paste request received from requestor {} for target {}",
-                        ev.requestor, ev.target
-                    );
-
-                    let modifier = self.next_paste_modifier;
-                    self.next_paste_modifier = None;
-
-                    let reply = |property| -> Result<()> {
-                        conn.send_event(
-                            false,
-                            ev.requestor,
-                            EventMask::NO_EVENT,
-                            SelectionNotifyEvent {
-                                response_type: SELECTION_NOTIFY_EVENT,
-                                sequence: ev.sequence,
-                                time: ev.time,
-                                requestor: ev.requestor,
-                                selection: ev.selection,
-                                target: ev.target,
-                                property,
-                            },
-                        )?
-                        .check()?;
-                        Ok(())
-                    };
-
-                    let property = if ev.property == x11rb::NONE {
-                        debug!("obsolete client detected");
-                        ev.target
-                    } else {
-                        ev.property
-                    };
-                    if property == x11rb::NONE {
-                        warn!("invalid paste request: no property provided to place the data");
-                        break 'blk reply(x11rb::NONE)?;
-                    }
-
-                    let reply = |reply_property| {
-                        if reply_property == x11rb::NONE {
-                            conn.delete_property(ev.requestor, property)?.check()?;
-                        }
-                        reply(reply_property)
-                    };
-
-                    if ev.selection != self.selection_atom {
-                        debug!("unsupported selection type: {}", ev.selection);
-                        break 'blk reply(x11rb::NONE)?;
-                    }
-                    let Some(item_id) = self.paste_item_id else {
-                        debug!("nothing to paste: no paste item id");
-                        break 'blk reply(x11rb::NONE)?;
-                    };
-                    let Some(item) = self.items.get(&item_id) else {
-                        debug!("nothing to paste: no paste item");
-                        break 'blk reply(x11rb::NONE)?;
-                    };
-
-                    let mut supported_atoms = Vec::new();
-                    supported_atoms.push(self.atoms.TARGETS);
-                    let mut requested_data = None;
-                    for (atom_name, data) in item.data() {
-                        let atom =
-                            get_or_create_mime_atom(conn, self.mime_atoms.get_mut(), atom_name)?;
-                        if atom != x11rb::NONE {
-                            supported_atoms.push(atom);
-                        }
-
-                        if atom == ev.target {
-                            requested_data = Some((data, atom_name));
-                        }
-                    }
-
-                    if !supported_atoms.contains(&ev.target) {
-                        debug!("unsupported target: {}", ev.target);
-                        break 'blk reply(x11rb::NONE)?;
-                    }
-
-                    if ev.target == self.atoms.TARGETS {
-                        debug!("responding to paste request with TARGETS");
-                        conn.change_property32(
-                            PropMode::REPLACE,
-                            ev.requestor,
-                            property,
-                            AtomEnum::ATOM,
-                            &supported_atoms,
-                        )?
-                        .check()?;
-                        self.next_paste_modifier = modifier; // keep the modifier for the next real target
-                        break 'blk reply(property)?;
-                    }
-
-                    info!(
-                        "transfering selection to requestor {} with atom {}",
-                        ev.requestor, property
-                    );
-
-                    let (raw_data, atom_name) = requested_data.unwrap();
-                    let data = if modifier.is_some_and(|m| m.trim) {
-                        if is_plaintext_mime(atom_name) {
-                            trim_unicode_utf8(raw_data).unwrap()
-                        } else {
-                            debug!("trim-pasting on a non-text item");
-                            raw_data
-                        }
-                    } else {
-                        raw_data
-                    };
-                    if data.len() > INCR_CHUNK_SIZE {
-                        debug!(
-                            "starting paste request INCR transfer for {} bytes",
-                            data.len()
-                        );
-                        conn.change_window_attributes(
-                            ev.requestor,
-                            &ChangeWindowAttributesAux::new()
-                                .event_mask(EventMask::PROPERTY_CHANGE),
-                        )?;
-                        conn.change_property32(
-                            PropMode::REPLACE,
-                            ev.requestor,
-                            property,
-                            atoms.INCR,
-                            &[u32::try_from(data.len()).unwrap_or(u32::MAX)],
-                        )?
-                        .check()?;
-
-                        self.incr_paste_tasks.insert(
-                            (ev.requestor, property),
-                            Task::new(
-                                IncrPasteTaskState::TransferingIncr {
-                                    target: ev.target,
-                                    item_id,
-                                    data_atom_name: atom_name.to_string(),
-                                    offset: 0,
-                                    modifier,
-                                },
-                                (),
-                            ),
-                        );
-
-                        break 'blk reply(property)?;
-                    }
-
-                    info!(
-                        "responded to requestor {} paste request with selection {} ({atom_name})",
-                        ev.requestor,
-                        item.id()
-                    );
-                    conn.change_property8(
-                        PropMode::REPLACE,
-                        ev.requestor,
-                        property,
-                        ev.target,
-                        data,
-                    )?
-                    .check()?;
-                    reply(property)?;
-
-                    if modifier.is_some_and(|m| m.and_enter) {
-                        let (key, _, keycode) =
-                            get_input_utils(conn, self.screen, self.key_converter);
-
-                        // Release previously pressed Enter key if it's mapped as paste action
-                        key(KEY_RELEASE_EVENT, keycode(Keysym::Return)?)?;
-
-                        key(KEY_PRESS_EVENT, keycode(Keysym::Return)?)?;
-                        key(KEY_RELEASE_EVENT, keycode(Keysym::Return)?)?;
-                    }
-                }
-
-                // Handle INCR paste request
-                Event::PropertyNotify(ev) => {
-                    if ev.state != Property::DELETE {
-                        trace!("ignoring irrelevant property state change: {:?}", ev.state);
-                        break 'blk;
-                    }
-
-                    let Some(task) = self.incr_paste_tasks.get_mut(&(ev.window, ev.atom)) else {
-                        error!("received property notification after INCR transfer completed");
-                        break 'blk;
-                    };
-
-                    match task.state {
-                        IncrPasteTaskState::TransferingIncr {
-                            target,
-                            item_id,
-                            ref data_atom_name,
-                            ref mut offset,
-                            modifier,
-                        } => {
-                            let end_transfering =
-                                |incr_paste_tasks: &mut HashMap<_, _>| -> Result<()> {
-                                    incr_paste_tasks.remove(&(ev.window, ev.atom));
-                                    conn.change_window_attributes(
-                                        ev.window,
-                                        &ChangeWindowAttributesAux::new()
-                                            .event_mask(EventMask::NO_EVENT),
-                                    )?;
-                                    Ok(())
-                                };
-
-                            if let Some(data) = &self
-                                .items
-                                .get(&item_id)
-                                .and_then(|i| i.data().get(data_atom_name))
-                            {
-                                let end = offset.saturating_add(INCR_CHUNK_SIZE).min(data.len());
-                                let chunk = &data[*offset..end];
-
-                                if *offset == end {
-                                    info!(
-                                        "responded to requestor {} paste request with selection {} ({data_atom_name})",
-                                        ev.window, item_id
-                                    );
-                                    end_transfering(&mut self.incr_paste_tasks)?;
-
-                                    if modifier.is_some_and(|m| m.and_enter) {
-                                        let (key, _, keycode) =
-                                            get_input_utils(conn, self.screen, self.key_converter);
-
-                                        // Release previously pressed Enter key if it's mapped as paste action
-                                        key(KEY_RELEASE_EVENT, keycode(Keysym::Return)?)?;
-
-                                        key(KEY_PRESS_EVENT, keycode(Keysym::Return)?)?;
-                                        key(KEY_RELEASE_EVENT, keycode(Keysym::Return)?)?;
-                                    }
-                                } else {
-                                    debug!(
-                                        "continuing INCR transfer with {} bytes remaining",
-                                        data.len() - end
-                                    );
-                                    *offset = end;
-                                }
-
-                                conn.change_property8(
-                                    PropMode::REPLACE,
-                                    ev.window,
-                                    ev.atom,
-                                    target,
-                                    chunk,
-                                )?
-                                .check()?;
-                            } else {
-                                warn!(
-                                    "paste selection {item_id} with target {data_atom_name} not found, stopping INCR transfer"
-                                );
-                                end_transfering(&mut self.incr_paste_tasks)?;
-                                conn.change_property8(
-                                    PropMode::REPLACE,
-                                    ev.window,
-                                    ev.atom,
-                                    target,
-                                    &[],
-                                )?
-                                .check()?;
-                            }
-                        }
-                    }
-                }
-                Event::SelectionClear(event)
-                    if event.owner == paste_window && self.paste_item_id.is_some() =>
-                {
-                    info!("lost selection ownership");
-                }
                 _ => {}
             }
         }
 
         self.purge_overdue_tasks();
 
-        Ok(None)
+        Ok(EventHandlingResult::None)
     }
 
     fn process_selection_data(
@@ -822,7 +512,7 @@ impl<'a> Selection<'a> {
         mime_name: Option<String>,
         mime_atom: Atom,
         owner: Owner,
-    ) -> Result<Option<(Option<&SelectionItem>, Vec<SelectionItem>)>> {
+    ) -> Result<EventHandlingResult> {
         let mut task = self.request_tasks.remove(&transfer_window.id).unwrap();
 
         let RequestTaskState::PendingSelection {
@@ -859,17 +549,17 @@ impl<'a> Selection<'a> {
                     x11rb::CURRENT_TIME,
                 )?
                 .check()?;
-            return Ok(None);
+            return Ok(EventHandlingResult::None);
         }
 
         self.transfer_windows.release(transfer_window);
 
         if data.is_empty() {
             warn!("dropping empty selection");
-            return Ok(None);
+            return Ok(EventHandlingResult::None);
         }
 
-        let prev_item = self.items.front();
+        let prev_item = self.history.items().front();
         let mut removed = Vec::new();
 
         // We only support merge plaintext items without any other type of data
@@ -892,14 +582,17 @@ impl<'a> Selection<'a> {
             && (contains(new_text, prev_text) || contains(prev_text, new_text))
         {
             debug!("merging selection with the previous one");
-            removed.push(self.items.pop_front().unwrap().1);
+            removed.push(self.history.pop_front().unwrap());
         }
 
         let (new_item_id, new_item, removed) =
             self.insert_data_item(mem::take(data), removed, owner)?;
 
         info!("selection transfer completed with new selection: {new_item_id}");
-        Ok(Some((new_item, removed)))
+        Ok(EventHandlingResult::HistoryUpdated {
+            added: new_item.map(|item| item.id()),
+            removed,
+        })
     }
 
     pub fn insert_text_item(
@@ -921,38 +614,38 @@ impl<'a> Selection<'a> {
         mut removed: Vec<SelectionItem>,
         owner: Owner,
     ) -> Result<(u64, Option<&SelectionItem>, Vec<SelectionItem>)> {
-        let new_item_id = hash_selection_data(&data)?;
+        let insert_item_id = hash_selection_data(&data)?;
 
         let mut is_previously_seen = false;
         let mut new_item = None;
-        if self.items.contains_key(&new_item_id) {
-            if self.items.get(&new_item_id).is_some_and(|i| i.is_pinned()) {
+        if self.history.contains(insert_item_id) {
+            if self
+                .history
+                .get(insert_item_id)
+                .is_some_and(|i| i.is_pinned())
+            {
                 debug!("selection is duplicated, old one is pinned, keeping old selection");
             } else {
                 debug!("selection is duplicated, removing old one");
-                let previous_seen_item = self.items.remove(&new_item_id).unwrap();
-                self.items
-                    .insert(self.metadata.pinned_count, new_item_id, previous_seen_item);
+                let previous_seen_item = self.history.remove(insert_item_id).unwrap();
+                self.history
+                    .insert_after_pinned(insert_item_id, previous_seen_item.data().clone());
             }
 
             is_previously_seen = true;
         } else {
-            self.items.insert(
-                self.metadata.pinned_count,
-                new_item_id,
-                SelectionItem::create(new_item_id, mem::take(&mut data)),
-            );
+            self.history
+                .insert_after_pinned(insert_item_id, mem::take(&mut data));
 
-            if self.items.len() > self.config.item_limit {
-                let removed_map = self.items.split_off(self.config.item_limit);
-                removed.extend(removed_map.into_iter().map(|(_, i)| i));
+            if self.history.len() > self.config.item_limit {
+                removed.extend(self.history.split_off(self.config.item_limit));
             };
 
-            new_item = self.items.get(&new_item_id);
+            new_item = self.history.get(insert_item_id);
         }
 
         self.prev_item_metadata = Some((owner, Instant::now(), is_previously_seen));
-        Ok((new_item_id, new_item, removed))
+        Ok((insert_item_id, new_item, removed))
     }
 
     fn purge_overdue_tasks(&mut self) {
@@ -984,202 +677,7 @@ impl<'a> Selection<'a> {
                 atom: transfer_atom,
             });
         }
-
-        let (paste_kept, paste_removed): (HashMap<_, _>, HashMap<_, _>) = self
-            .incr_paste_tasks
-            .drain()
-            .partition(|(_, task)| now.duration_since(task.last_update) < OVERDUE_TIMEOUT);
-        self.incr_paste_tasks = paste_kept;
-
-        if !paste_removed.is_empty() {
-            warn!("purging overdue paste tasks: {:?}", paste_removed.keys());
-        }
     }
-
-    pub fn paste(
-        &mut self,
-        item_id: u64,
-        original_pointer: (i16, i16, Option<Window>),
-        modifier: PasteModifier,
-    ) -> Result<()> {
-        // Move paste item to the top
-        let Some(item_idx) = self.items.iter().position(|(&id, _)| id == item_id) else {
-            bail!("item not found: {item_id}");
-        };
-        if item_idx >= self.metadata.pinned_count {
-            let item = self.items.remove(&item_id).unwrap();
-            self.items.insert(self.metadata.pinned_count, item_id, item);
-        }
-
-        let conn = &self.window.conn;
-        let paste_window = self.window.win_id.get();
-
-        let focused_window = conn.get_input_focus()?.reply()?.focus;
-        if focused_window == paste_window {
-            warn!("trying to paste into itself");
-            return Ok(());
-        }
-
-        self.set_next_paste_item(item_id)?;
-
-        let (key, move_pointer, keycode) = get_input_utils(conn, self.screen, self.key_converter);
-
-        // Prevent holding modifiers from interfering with pasting keymap
-        key(KEY_RELEASE_EVENT, keycode(Keysym::Control_L)?)?;
-        key(KEY_RELEASE_EVENT, keycode(Keysym::Control_R)?)?;
-        key(KEY_RELEASE_EVENT, keycode(Keysym::Shift_L)?)?;
-        key(KEY_RELEASE_EVENT, keycode(Keysym::Shift_R)?)?;
-        key(KEY_RELEASE_EVENT, keycode(Keysym::Alt_L)?)?;
-        key(KEY_RELEASE_EVENT, keycode(Keysym::Alt_R)?)?;
-        key(KEY_RELEASE_EVENT, keycode(Keysym::Super_L)?)?;
-        key(KEY_RELEASE_EVENT, keycode(Keysym::Super_R)?)?;
-
-        if self.selection_atom == self.atoms.CLIPBOARD {
-            let app_paste_keymaps = &self.config.app_paste_keymaps;
-            // Focus may be PointerRoot/None or the window may already be gone;
-            // fall back to the default keymap instead of failing the paste.
-            let window_class = get_window_class(conn, focused_window)
-                .inspect_err(|e| {
-                    warn!("failed to get class of focused window {focused_window}: {e}")
-                })
-                .ok()
-                .flatten();
-            let keymap = if let Some((instance_name, class_name)) = window_class
-                && let Some(keymap) = app_paste_keymaps
-                    .get(&instance_name)
-                    .or_else(|| app_paste_keymaps.get(&class_name))
-            {
-                keymap
-            } else {
-                &vec![KeyStroke {
-                    key: 'v' as u32,
-                    modifiers: vec![Modifier::Control],
-                }]
-            };
-
-            info!("pasting into {focused_window} using keymap: {keymap:?}");
-            for key_stroke in keymap {
-                for modifier in &key_stroke.modifiers {
-                    key(KEY_PRESS_EVENT, keycode((*modifier).into())?)?;
-                }
-                key(KEY_PRESS_EVENT, keycode(Keysym::new(key_stroke.key))?)?;
-                key(KEY_RELEASE_EVENT, keycode(Keysym::new(key_stroke.key))?)?;
-                for modifier in key_stroke.modifiers.iter().rev() {
-                    key(KEY_RELEASE_EVENT, keycode((*modifier).into())?)?;
-                }
-            }
-        } else if self.selection_atom == self.atoms.PRIMARY {
-            info!(
-                "pasting into {focused_window} using middle mouse button at ({}, {})",
-                original_pointer.0, original_pointer.1
-            );
-            let pointer_current_pos = conn.query_pointer(self.screen.root)?.reply()?;
-
-            // Some windows (e.g., Firefox) don't receive paste event if memoni middle-clickes immediately
-            // after memoni window closes. For these, we can make memoni wait a moment before clicking.
-            let need_delay = original_pointer
-                .2
-                .and_then(|win| {
-                    get_window_class(conn, win)
-                        .inspect_err(|e| warn!("failed to get class of window under pointer: {e}"))
-                        .ok()
-                        .flatten()
-                })
-                .map(|(instance_name, class_name)| {
-                    let instance_matched = self.config
-                        .middle_click_delay_patterns
-                        .iter()
-                        .any(|re| re.is_match(&instance_name));
-                    if instance_matched {
-                        debug!("applying middle click delay workaround for window with instance '{instance_name}'");
-                        return true;
-                    }
-
-                    let class_matched = self.config
-                        .middle_click_delay_patterns
-                        .iter()
-                        .any(|re| re.is_match(&class_name));
-                    if class_matched {
-                        debug!("applying middle click delay workaround for window with class '{class_name}'");
-                        return true;
-                    }
-
-                    false
-                })
-                .unwrap_or(false);
-
-            if need_delay {
-                thread::sleep(Duration::from_millis(150));
-            }
-
-            move_pointer(original_pointer.0, original_pointer.1)?;
-            key(BUTTON_PRESS_EVENT, 2)?; // middle mouse button
-
-            if need_delay {
-                conn.sync()?;
-                thread::sleep(Duration::from_millis(2));
-            }
-
-            key(BUTTON_RELEASE_EVENT, 2)?;
-            move_pointer(pointer_current_pos.root_x, pointer_current_pos.root_y)?;
-        }
-        conn.sync()?;
-
-        self.next_paste_modifier = Some(modifier);
-
-        Ok(())
-    }
-
-    pub fn set_next_paste_item(&mut self, item_id: u64) -> Result<()> {
-        let paste_window = self.window.win_id.get();
-        self.window
-            .conn
-            .set_selection_owner(paste_window, self.selection_atom, x11rb::CURRENT_TIME)?
-            .check()?;
-        self.paste_item_id = Some(item_id);
-
-        Ok(())
-    }
-
-    /// Returns true if item is pinned, false if item is unpinned
-    pub fn toggle_pin(&mut self, item_id: u64) -> Result<bool> {
-        let Some(mut item) = self.items.remove(&item_id) else {
-            bail!("item not found: {item_id}");
-        };
-        let is_pinned = item.is_pinned();
-
-        item.set_pinned(!is_pinned);
-        if is_pinned {
-            self.metadata.pinned_count -= 1;
-            self.items.insert(self.metadata.pinned_count, item_id, item);
-            Ok(false)
-        } else {
-            self.metadata.pinned_count += 1;
-            self.items.push_front(item_id, item);
-            Ok(true)
-        }
-    }
-
-    pub fn get_first_unpinned_item(&self) -> u64 {
-        self.items
-            .get_by_index(self.metadata.pinned_count)
-            .map(|(id, _)| *id)
-            .unwrap_or(0)
-    }
-}
-
-fn get_or_create_mime_atom(
-    conn: &XCBConnection,
-    mime_atoms: &mut HashMap<String, Atom>,
-    name: &str,
-) -> Result<Atom> {
-    if let Some(atom) = mime_atoms.get(name) {
-        return Ok(*atom);
-    }
-
-    let atom = conn.intern_atom(false, name.as_bytes())?.reply()?.atom;
-    mime_atoms.insert(name.to_string(), atom);
-    Ok(atom)
 }
 
 fn filter_mimes(mimes: HashMap<Atom, String>) -> HashMap<Atom, String> {
@@ -1220,31 +718,6 @@ fn filter_mimes(mimes: HashMap<Atom, String>) -> HashMap<Atom, String> {
     filtered_mimes
 }
 
-fn get_window_class(conn: &XCBConnection, window: Window) -> Result<Option<(String, String)>> {
-    let reply: GetPropertyReply = conn
-        .get_property(
-            false,
-            window,
-            AtomEnum::WM_CLASS,
-            AtomEnum::STRING,
-            0,
-            u32::MAX,
-        )?
-        .reply()?;
-
-    if reply.value_len == 0 {
-        return Ok(None);
-    }
-
-    let value = String::from_utf8_lossy(&reply.value).into_owned();
-    let mut parts = value.split('\0');
-
-    let instance_name = parts.next().unwrap_or("").to_string();
-    let class_name = parts.next().unwrap_or("").to_string();
-
-    Ok(Some((instance_name, class_name)))
-}
-
 fn hash_selection_data(data: &SelectionData) -> Result<u64> {
     let data_bin = bincode::encode_to_vec(data, BINCODE_CONFIG)?;
     let hash = ahash::RandomState::with_seed(HASH_SEED).hash_one(&data_bin);
@@ -1255,55 +728,4 @@ fn hash_selection_data(data: &SelectionData) -> Result<u64> {
 // Dumb algorithm here is fine I guess
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
-}
-
-fn trim_unicode_utf8(bytes: &[u8]) -> Result<&[u8]> {
-    let s = str::from_utf8(bytes)?;
-    let trimmed = s.trim();
-
-    let start = trimmed.as_ptr() as usize - bytes.as_ptr() as usize;
-    let end = start + trimmed.len();
-
-    Ok(&bytes[start..end])
-}
-
-#[allow(clippy::type_complexity)]
-fn get_input_utils(
-    conn: &XCBConnection,
-    screen: &Screen,
-    key_converter: &X11KeyConverter,
-) -> (
-    impl Fn(u8, u8) -> Result<()>,
-    impl Fn(i16, i16) -> Result<()>,
-    impl Fn(Keysym) -> Result<u8>,
-) {
-    let key = |type_, code| {
-        conn.xtest_fake_input(type_, code, x11rb::CURRENT_TIME, screen.root, 1, 1, 0)?;
-        Ok(())
-    };
-    let move_pointer = |x, y| {
-        conn.xtest_fake_input(
-            MOTION_NOTIFY_EVENT,
-            0,
-            x11rb::CURRENT_TIME,
-            screen.root,
-            x,
-            y,
-            0,
-        )?;
-        Ok(())
-    };
-    let keycode = |keysym| {
-        key_converter
-            .keysym_to_keycode(keysym)
-            .map(|kc| kc.raw() as u8)
-            .ok_or_else(|| {
-                anyhow!(
-                    "invalid key provided: {}",
-                    keysym.name().unwrap_or(&format!("<code {}>", keysym.raw()))
-                )
-            })
-    };
-
-    (key, move_pointer, keycode)
 }

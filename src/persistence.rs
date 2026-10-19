@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use bincode::{Decode, Encode};
 use log::{debug, error, info};
 use std::{
     collections::VecDeque,
@@ -10,13 +11,12 @@ use std::{
 };
 
 use crate::{
-    ordered_hash_map::OrderedHashMap,
-    selection::{SelectionMetadata, SelectionType},
+    item_list::ItemList, ordered_hash_map::OrderedHashMap, selection::SelectionType,
     selection_item::SelectionItem,
 };
 
 const BINCODE_CONFIG: bincode::config::Configuration = bincode::config::standard();
-const BINARY_VERSION: u32 = 2;
+const BINARY_VERSION: u32 = 3;
 
 struct SharedState {
     pending: Mutex<Option<Vec<u8>>>,
@@ -74,14 +74,10 @@ impl Persistence {
         Ok(Persistence { file_path, shared })
     }
 
-    pub fn save_selection_data(
-        &self,
-        items: &OrderedHashMap<u64, SelectionItem>,
-        metadata: &SelectionMetadata,
-    ) -> Result<()> {
+    pub fn save_selection_data(&self, items: &ItemList, bookmarks: &ItemList) -> Result<()> {
         info!("saving selection items to {:?}", self.file_path);
 
-        let serialized_data = bincode::encode_to_vec((items, metadata), BINCODE_CONFIG)?;
+        let serialized_data = bincode::encode_to_vec((items, bookmarks), BINCODE_CONFIG)?;
         let mut p = self.shared.pending.lock().unwrap();
         *p = Some(serialized_data);
         drop(p);
@@ -90,12 +86,10 @@ impl Persistence {
         Ok(())
     }
 
-    pub fn load_selection_data(
-        &self,
-    ) -> Result<(OrderedHashMap<u64, SelectionItem>, SelectionMetadata)> {
+    pub fn load_selection_data(&self) -> Result<(ItemList, ItemList)> {
         if !self.file_path.exists() {
             info!("no persisted selection items file presented, skip loading");
-            return Ok((OrderedHashMap::new(), SelectionMetadata::default()));
+            return Ok((ItemList::default(), ItemList::default()));
         }
 
         info!("loading selection items from {:?}", self.file_path);
@@ -108,15 +102,16 @@ impl Persistence {
         let mut data = Vec::new();
         file.read_to_end(&mut data)?;
 
-        let items: Result<(OrderedHashMap<u64, SelectionItem>, SelectionMetadata)> = match version {
-            // version 1 does not have version field unfortunately
-            2 => bincode::decode_from_slice(&data, BINCODE_CONFIG)
-                .map(|(items, _)| items)
+        let items: Result<(ItemList, ItemList)> = match version {
+            3 => bincode::decode_from_slice(&data, BINCODE_CONFIG)
+                .map(|(data, _)| data)
                 .map_err(Into::into),
+            2 => decode_version_2(&data),
+            // version 1 does not have version field unfortunately
             _ => Err(anyhow!("invalid binary version")),
         };
 
-        let mut items = (match items {
+        let items = (match items {
             Ok(items) => Ok(items),
             Err(err) => {
                 debug!("decoding failed, trying to decode using version 1 format");
@@ -128,29 +123,13 @@ impl Persistence {
             }
         })?;
 
-        populate_pinned_flags(&mut items.0, items.1.pinned_count);
-
-        info!("{} items loaded", items.0.len());
+        info!(
+            "{} items and {} bookmarks loaded",
+            items.0.len(),
+            items.1.len()
+        );
         Ok(items)
     }
-}
-
-fn populate_pinned_flags(items: &mut OrderedHashMap<u64, SelectionItem>, pinned_count: usize) {
-    for (_, item) in items.iter_mut().take(pinned_count) {
-        item.set_pinned(true);
-    }
-}
-
-fn decode_version_1(
-    data: &[u8],
-) -> Result<(OrderedHashMap<u64, SelectionItem>, SelectionMetadata)> {
-    let old_items: VecDeque<SelectionItem> = bincode::decode_from_slice(data, BINCODE_CONFIG)?.0;
-    let mut new_items = OrderedHashMap::new();
-    for item in old_items {
-        new_items.push_back(item.id(), item);
-    }
-
-    Ok((new_items, SelectionMetadata::default()))
 }
 
 fn write_to_disk(
@@ -172,4 +151,29 @@ fn write_to_disk(
 
     debug!("saving selection items in background completed");
     Ok(())
+}
+
+fn decode_version_2(data: &[u8]) -> Result<(ItemList, ItemList)> {
+    let old_items: (OrderedHashMap<u64, SelectionItem>, SelectionMetadataV2) =
+        bincode::decode_from_slice(data, BINCODE_CONFIG)?.0;
+
+    Ok((
+        ItemList::new(old_items.0, old_items.1.pinned_count),
+        ItemList::default(),
+    ))
+}
+
+fn decode_version_1(data: &[u8]) -> Result<(ItemList, ItemList)> {
+    let old_items: VecDeque<SelectionItem> = bincode::decode_from_slice(data, BINCODE_CONFIG)?.0;
+    let mut new_items = OrderedHashMap::new();
+    for item in old_items {
+        new_items.push_back(item.id(), item);
+    }
+
+    Ok((ItemList::new(new_items, 0), ItemList::default()))
+}
+
+#[derive(Debug, Default, Encode, Decode)]
+struct SelectionMetadataV2 {
+    pinned_count: usize,
 }

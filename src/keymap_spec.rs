@@ -155,6 +155,16 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Key(KeyAction::Pin)),
             ),
             KeymapEntry::new(
+                &["C-Tab"],
+                "Toggle bookmark view",
+                plain!(Action::Key(KeyAction::ToggleBookmarkView)),
+            ),
+            KeymapEntry::new(
+                &["m"],
+                "Toggle bookmark on active item",
+                plain!(Action::Key(KeyAction::ToggleBookmark)),
+            ),
+            KeymapEntry::new(
                 &["Esc", "q"],
                 "Close window",
                 plain!(Action::Key(KeyAction::Close)),
@@ -352,6 +362,16 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 &["M-p"],
                 "Toggle pin on active item",
                 plain!(Action::Key(KeyAction::Pin)),
+            ),
+            KeymapEntry::new(
+                &["C-Tab"],
+                "Toggle bookmark view",
+                plain!(Action::Key(KeyAction::ToggleBookmarkView)),
+            ),
+            KeymapEntry::new(
+                &["M-m"],
+                "Toggle bookmark on active item",
+                plain!(Action::Key(KeyAction::ToggleBookmark)),
             ),
             KeymapEntry::new(
                 &["S-Tab"],
@@ -690,6 +710,8 @@ pub enum KeyAction {
     Scroll(ScrollAction),
     Remove,
     Pin,
+    ToggleBookmarkView,
+    ToggleBookmark,
     ShowSearch,
     CycleSearchMode,
     CopySearchSelection,
