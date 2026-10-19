@@ -651,6 +651,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                 active_id = search.visible_ids.first().copied().unwrap_or(0);
                                 ui.reset_scroll_offset();
 
+                                ui.show_success("Copied to clipboard");
                                 persistence.save_selection_data(&selection.history, &bookmarks)?;
                             }
                         }

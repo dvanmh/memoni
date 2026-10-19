@@ -208,6 +208,10 @@ pub struct ThemeConfig {
     #[serde_as(as = "DisplayFromStr")]
     pub error_background: Color,
     #[serde_as(as = "DisplayFromStr")]
+    pub success_foreground: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub success_background: Color,
+    #[serde_as(as = "DisplayFromStr")]
     pub pin_color: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub search_caret: Color,
@@ -239,6 +243,8 @@ impl Default for ThemeConfig {
             pending_keys_background: Color(0xa0000000),
             error_foreground: Color(0xfff87171),
             error_background: Color(0xdd450a0a),
+            success_foreground: Color(0xff8ddb8d),
+            success_background: Color(0xdd0a450a),
             pin_color: Color(0xffcccccc),
             search_caret: Color(0xffc0deff),
             search_selection: Color(0xff005c80),

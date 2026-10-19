@@ -349,6 +349,16 @@ error_foreground = "#e57373"
 # default: "#450a0add"
 error_background = "#800000a0"
 
+# Success message overlay text color
+#
+# default: "#8ddb8d"
+success_foreground = "#90f5ad"
+
+# Success message overlay background color
+#
+# default: "#0a450add"
+success_background = "#022111a0"
+
 # Pinned item indicator color
 #
 # default: "#cccccc"

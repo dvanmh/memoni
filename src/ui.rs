@@ -63,7 +63,19 @@ struct ImageInfo {
     size: Option<(u32, u32)>,
 }
 
-const ERROR_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
+const TOAST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToastKind {
+    Error,
+    Success,
+}
+
+struct ToastMessage {
+    kind: ToastKind,
+    message: String,
+    shown_at: Instant,
+}
 
 const HINTS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
 
@@ -136,7 +148,7 @@ pub struct Ui<'a> {
     fallback: Fallback,
     help_modal: HelpModal,
     color_preview_background_texture: TextureHandle,
-    error_message: Option<(String, Instant)>,
+    toast_message: Option<ToastMessage>,
 
     is_initial_run: bool,
     prev_active_id: u64,
@@ -229,7 +241,7 @@ impl<'a> Ui<'a> {
             },
             help_modal: HelpModal::new(),
             color_preview_background_texture,
-            error_message: None,
+            toast_message: None,
 
             is_initial_run: true,
             prev_active_id: 0,
@@ -536,7 +548,7 @@ impl<'a> Ui<'a> {
             }
             self.pending_keys_overlay(ui, pending_keys, flow);
 
-            self.error_overlay(ui, flow);
+            self.toast_overlay(ui, flow);
 
             self.prev_pass.flow = Some(flow);
         });
@@ -1129,32 +1141,52 @@ impl<'a> Ui<'a> {
     }
 
     pub fn show_error(&mut self, message: impl Into<String>) {
-        self.error_message = Some((message.into(), Instant::now()));
+        self.toast_message = Some(ToastMessage {
+            kind: ToastKind::Error,
+            message: message.into(),
+            shown_at: Instant::now(),
+        })
     }
 
-    fn error_overlay(&mut self, ui: &egui::Ui, flow: UiFlow) {
+    pub fn show_success(&mut self, message: impl Into<String>) {
+        self.toast_message = Some(ToastMessage {
+            kind: ToastKind::Success,
+            message: message.into(),
+            shown_at: Instant::now(),
+        })
+    }
+
+    fn toast_overlay(&mut self, ui: &egui::Ui, flow: UiFlow) {
         if self
-            .error_message
+            .toast_message
             .as_ref()
-            .is_some_and(|(_, shown_at)| shown_at.elapsed() >= ERROR_MESSAGE_TIMEOUT)
+            .is_some_and(|toast| toast.shown_at.elapsed() >= TOAST_MESSAGE_TIMEOUT)
         {
-            self.error_message = None;
+            self.toast_message = None;
         }
 
-        let Some((message, _)) = &self.error_message else {
+        let Some(toast) = &self.toast_message else {
             return;
         };
 
-        let fg_color: Color32 = self.config.theme.error_foreground.into();
-        let bg_color: Color32 = self.config.theme.error_background.into();
+        let (fg_color, bg_color): (Color32, Color32) = match toast.kind {
+            ToastKind::Error => (
+                self.config.theme.error_foreground.into(),
+                self.config.theme.error_background.into(),
+            ),
+            ToastKind::Success => (
+                self.config.theme.success_foreground.into(),
+                self.config.theme.success_background.into(),
+            ),
+        };
         let padding: Vec2 = self.config.layout.pending_keys_padding.into();
         let margin: Vec2 = self.config.layout.pending_keys_margin.into();
 
         let rect = ui.input(|i| i.content_rect());
-        let painter = ui.layer_painter(LayerId::new(Order::Foreground, Id::new("error_overlay")));
+        let painter = ui.layer_painter(LayerId::new(Order::Foreground, Id::new("toast_overlay")));
 
         let galley = painter.layout(
-            message.to_owned(),
+            toast.message.clone(),
             FontId::proportional(self.config.font.overlay_text_size),
             fg_color,
             rect.width() - margin.x * 2.0 - padding.x * 2.0,
@@ -1325,7 +1357,7 @@ impl<'a> Ui<'a> {
         info!("resetting ui states");
         self.is_initial_run = true;
         self.help_modal.hide();
-        self.error_message = None;
+        self.toast_message = None;
         self.state = UiState {
             pointer_acted: false,
             pointer_pos: Pos2::ZERO,
