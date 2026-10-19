@@ -34,7 +34,7 @@ use crate::{
 const HASH_SEED: usize = 0xfd9aadcf54cc0f35;
 const BINCODE_CONFIG: bincode::config::Configuration = bincode::config::standard();
 const OVERDUE_TIMEOUT: Duration = Duration::from_secs(3);
-const MAX_INCR_SIZE: usize = 10 * 1024 * 1024;
+const MAX_INCR_SIZE: usize = 32 * 1024 * 1024;
 
 x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
