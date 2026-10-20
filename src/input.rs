@@ -8,7 +8,8 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use egui::{
-    Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect, TouchPhase, Vec2,
+    Event, Modifiers, MouseWheelSource, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect,
+    TouchPhase, Vec2,
 };
 use log::{debug, info, trace, warn};
 use x11rb::{
@@ -208,6 +209,7 @@ impl<'a> Input<'a> {
                             delta: d,
                             modifiers: *modifiers,
                             phase: TouchPhase::Move,
+                            source: MouseWheelSource::Unknown,
                         })
                         .into_iter(),
                 )
