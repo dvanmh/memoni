@@ -20,7 +20,7 @@ use zbus::{MatchRule, fdo::DBusProxy, message::Type, proxy::CacheProperties};
 
 const CONNECTION_LIMIT: usize = 10;
 const DESCENDANT_SEARCH_LIMIT: usize = 30;
-const PROXY_CACHE_LIMIT: usize = 64;
+const PROXY_CACHE_LIMIT: usize = 128;
 
 pub struct EventChannel<T> {
     pub slot: Mutex<Option<T>>,
@@ -582,8 +582,8 @@ fn invalidate_defunct(
     dead.insert(key.clone());
     let mut stack = vec![key];
     while let Some(k) = stack.pop() {
-        if let Some(children) = proxy_cache.children.get(&k) {
-            for child in children {
+        if let Some(node) = proxy_cache.nodes.get(&k) {
+            for child in &node.children {
                 if dead.insert(child.clone()) {
                     stack.push(child.clone());
                 }
@@ -591,16 +591,12 @@ fn invalidate_defunct(
         }
     }
 
-    proxy_cache.accessible.retain(|k, _| !dead.contains(k));
-    proxy_cache.text.retain(|k, _| !dead.contains(k));
-    proxy_cache.component.retain(|k, _| !dead.contains(k));
-    proxy_cache.parents.retain(|k, _| !dead.contains(k));
-    proxy_cache.children.retain(|k, set| {
+    proxy_cache.nodes.retain(|k, node| {
         if dead.contains(k) {
             return false;
         }
-        set.retain(|c| !dead.contains(c));
-        !set.is_empty()
+        node.children.retain(|c| !dead.contains(c));
+        true
     });
     contains_cache.retain(|k, _| !dead.contains(k));
 }
@@ -608,22 +604,23 @@ fn invalidate_defunct(
 type ObjectKey = (String, String);
 type AncestryEdge = (ObjectKey, ObjectKey);
 
+#[derive(Default)]
+struct NodeEntry {
+    accessible: Option<AccessibleProxy<'static>>,
+    text: Option<TextProxy<'static>>,
+    component: Option<ComponentProxy<'static>>,
+    parent: Option<ObjectKey>,
+    children: HashSet<ObjectKey>,
+}
+
 struct ProxyCache {
-    accessible: LruMap<AccessibleProxy<'static>>,
-    text: LruMap<TextProxy<'static>>,
-    component: LruMap<ComponentProxy<'static>>,
-    parents: HashMap<ObjectKey, ObjectKey>,
-    children: HashMap<ObjectKey, HashSet<ObjectKey>>,
+    nodes: LruMap<NodeEntry>,
 }
 
 impl ProxyCache {
     fn new() -> Self {
         Self {
-            accessible: LruMap::new(PROXY_CACHE_LIMIT),
-            text: LruMap::new(PROXY_CACHE_LIMIT),
-            component: LruMap::new(PROXY_CACHE_LIMIT),
-            parents: HashMap::new(),
-            children: HashMap::new(),
+            nodes: LruMap::new(PROXY_CACHE_LIMIT),
         }
     }
 
@@ -633,13 +630,15 @@ impl ProxyCache {
         r: &ObjectRefOwned,
     ) -> zbus::Result<AccessibleProxy<'static>> {
         let key = object_key(r);
-        if let Some(proxy) = self.accessible.get(&key) {
+        if let Some(node) = self.nodes.get_mut(&key)
+            && let Some(proxy) = &node.accessible
+        {
             return Ok(proxy.clone());
         }
 
         let proxy = build_accessible(conn, r).await?;
         self.record_ancestry(conn, &key, &proxy).await?;
-        self.accessible.insert(key, proxy.clone());
+        self.with_node(&key, |node| node.accessible = Some(proxy.clone()));
 
         Ok(proxy)
     }
@@ -650,7 +649,9 @@ impl ProxyCache {
         item: &ObjectRefOwned,
     ) -> zbus::Result<TextProxy<'static>> {
         let key = object_key(item);
-        if let Some(proxy) = self.text.get(&key) {
+        if let Some(node) = self.nodes.get_mut(&key)
+            && let Some(proxy) = &node.text
+        {
             return Ok(proxy.clone());
         }
 
@@ -665,7 +666,7 @@ impl ProxyCache {
             .build()
             .await?;
         self.record_ancestry_if_missing(conn, &key, item).await?;
-        self.text.insert(key, proxy.clone());
+        self.with_node(&key, |node| node.text = Some(proxy.clone()));
 
         Ok(proxy)
     }
@@ -676,7 +677,9 @@ impl ProxyCache {
         item: &ObjectRefOwned,
     ) -> zbus::Result<ComponentProxy<'static>> {
         let key = object_key(item);
-        if let Some(proxy) = self.component.get(&key) {
+        if let Some(node) = self.nodes.get_mut(&key)
+            && let Some(proxy) = &node.component
+        {
             return Ok(proxy.clone());
         }
 
@@ -691,7 +694,7 @@ impl ProxyCache {
             .build()
             .await?;
         self.record_ancestry_if_missing(conn, &key, item).await?;
-        self.component.insert(key, proxy.clone());
+        self.with_node(&key, |node| node.component = Some(proxy.clone()));
 
         Ok(proxy)
     }
@@ -702,7 +705,7 @@ impl ProxyCache {
         key: &ObjectKey,
         acc: &AccessibleProxy<'static>,
     ) -> zbus::Result<()> {
-        if self.parents.contains_key(key) {
+        if self.knows_ancestry(key) {
             return Ok(());
         }
 
@@ -721,7 +724,7 @@ impl ProxyCache {
         key: &ObjectKey,
         item: &ObjectRefOwned,
     ) -> zbus::Result<()> {
-        if !self.parents.contains_key(key) {
+        if !self.knows_ancestry(key) {
             let acc = self.accessible(conn, item).await?;
             self.record_ancestry(conn, key, &acc).await?;
         }
@@ -741,12 +744,16 @@ impl ProxyCache {
         while !is_null(&cur) {
             let parent_key = object_key(&cur);
             edges.push((child_key, parent_key.clone()));
-            if self.parents.contains_key(&parent_key) {
+            if self.knows_ancestry(&parent_key) {
                 return Ok(edges);
             }
             child_key = parent_key;
 
-            let parent_acc = match self.accessible.get(&child_key) {
+            let parent_acc = match self
+                .nodes
+                .get(&child_key)
+                .and_then(|node| node.accessible.as_ref())
+            {
                 Some(proxy) => proxy,
                 None => &build_accessible(conn, &cur).await?,
             };
@@ -758,8 +765,43 @@ impl ProxyCache {
 
     fn commit_ancestry(&mut self, edges: Vec<AncestryEdge>) {
         for (child, parent) in edges {
-            self.parents.insert(child.clone(), parent.clone());
-            self.children.entry(parent).or_default().insert(child);
+            self.with_node(&child, |node| node.parent = Some(parent.clone()));
+            self.with_node(&parent, |node| {
+                node.children.insert(child.clone());
+            });
+        }
+    }
+
+    fn knows_ancestry(&mut self, key: &ObjectKey) -> bool {
+        self.nodes
+            .get(key)
+            .is_some_and(|node| node.parent.is_some())
+    }
+
+    fn with_node(&mut self, key: &ObjectKey, update: impl FnOnce(&mut NodeEntry)) {
+        if let Some(node) = self.nodes.get_mut(key) {
+            update(node);
+            return;
+        }
+        if self.nodes.is_full() {
+            self.evict_leaf();
+        }
+        let mut node = NodeEntry::default();
+        update(&mut node);
+        self.nodes.insert(key.clone(), node);
+    }
+
+    fn evict_leaf(&mut self) {
+        let evicted = self
+            .nodes
+            .evict_oldest_where(|node| node.children.is_empty());
+        let Some((key, node)) = evicted else {
+            return;
+        };
+        if let Some(parent) = node.parent
+            && let Some(parent_node) = self.nodes.get_mut(&parent)
+        {
+            parent_node.children.remove(&key);
         }
     }
 }
@@ -819,6 +861,10 @@ impl<V> LruMap<V> {
         }
     }
 
+    fn is_full(&self) -> bool {
+        self.map.len() >= self.limit
+    }
+
     fn get(&mut self, key: &ObjectKey) -> Option<&V> {
         self.map.get_mut(key).map(|entry| {
             entry.0 = self.tick;
@@ -826,22 +872,29 @@ impl<V> LruMap<V> {
         })
     }
 
+    fn get_mut(&mut self, key: &ObjectKey) -> Option<&mut V> {
+        self.map.get_mut(key).map(|entry| {
+            entry.0 = self.tick;
+            &mut entry.1
+        })
+    }
+
     fn insert(&mut self, key: ObjectKey, value: V) {
         self.tick += 1;
-        if self.map.len() >= self.limit && !self.map.contains_key(&key) {
-            let oldest = self
-                .map
-                .iter()
-                .min_by_key(|(_, (t, _))| *t)
-                .map(|(k, _)| k.clone());
-            if let Some(oldest) = oldest {
-                self.map.remove(&oldest);
-            }
-        }
         self.map.insert(key, (self.tick, value));
     }
 
-    fn retain(&mut self, mut f: impl FnMut(&ObjectKey, &V) -> bool) {
+    fn evict_oldest_where(&mut self, f: impl Fn(&V) -> bool) -> Option<(ObjectKey, V)> {
+        let oldest = self
+            .map
+            .iter()
+            .filter(|(_, (_, v))| f(v))
+            .min_by_key(|(_, (t, _))| *t)
+            .map(|(k, _)| k.clone());
+        oldest.and_then(|key| self.map.remove(&key).map(|(_, v)| (key, v)))
+    }
+
+    fn retain(&mut self, mut f: impl FnMut(&ObjectKey, &mut V) -> bool) {
         self.map.retain(|k, (_, v)| f(k, v));
     }
 }
