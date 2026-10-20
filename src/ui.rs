@@ -11,11 +11,12 @@ use std::{
 use anyhow::{Result, anyhow};
 use egui::{
     Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak,
-    FullOutput, Id, LayerId, Mesh, Order, Pos2, RawInput, Rect, Stroke, StrokeKind, TextureHandle,
-    TextureOptions, Vec2,
+    FullOutput, Id, IdSalt, LayerId, Mesh, Order, Pos2, RawInput, Rect, Stroke, StrokeKind,
+    TextureHandle, TextureOptions, Vec2,
     emath::GuiRounding as _,
     epaint::{self, ColorMode, PathStroke},
     scroll_area::{DragScroll, ScrollSource},
+    style::KineticScrollStyle,
     text_selection,
     widgets::text_edit::TextEditState,
 };
@@ -321,6 +322,11 @@ impl<'a> Ui<'a> {
             style.visuals.selection.bg_fill = theme.search_selection.into();
 
             style.animation_time = 0.15;
+            style.spacing.scroll.kinetic = KineticScrollStyle {
+                decay_time: 0.4,
+                stop_distance: 2.0,
+                ..Default::default()
+            };
         });
 
         info!("setting global egui options");
@@ -954,7 +960,6 @@ impl<'a> Ui<'a> {
                 current_offset,
             )
         });
-        constrain_scroll_bar_hovering_margin(ui, output.id, scroll_bar_rect, scroll_bar_margin);
 
         let (response, current_offset) = output.inner;
 
@@ -1113,7 +1118,7 @@ impl<'a> Ui<'a> {
         let rect = ui.input(|i| i.content_rect());
         let painter = ui.layer_painter(LayerId::new(
             Order::Foreground,
-            Id::new("pending_keys_overlay"),
+            Id::unique("pending_keys_overlay"),
         ));
 
         let galley = painter.layout(
@@ -1183,7 +1188,8 @@ impl<'a> Ui<'a> {
         let margin: Vec2 = self.config.layout.pending_keys_margin.into();
 
         let rect = ui.input(|i| i.content_rect());
-        let painter = ui.layer_painter(LayerId::new(Order::Foreground, Id::new("toast_overlay")));
+        let painter =
+            ui.layer_painter(LayerId::new(Order::Foreground, Id::unique("toast_overlay")));
 
         let galley = painter.layout(
             toast.message.clone(),
@@ -1226,8 +1232,9 @@ impl<'a> Ui<'a> {
                 .clamp(i8::MIN as f32, i8::MAX as f32) as i8;
         let padding_y = layout.window_padding.y;
 
-        let panel_id = Id::new("search_panel");
-        let input_id = Id::new("search_input");
+        let panel_id_salt = "search_panel";
+        let panel_id = ui.scope_id().with_salt(IdSalt::new(panel_id_salt));
+        let input_id = Id::unique("search_input");
 
         let about_to_expand = display_search && !ui.memory(|m| m.has_focus(input_id));
         let about_to_collapse = !display_search && ui.memory(|m| m.has_focus(input_id));
@@ -1272,8 +1279,8 @@ impl<'a> Ui<'a> {
         }
 
         let mut panel = match flow {
-            UiFlow::TopToBottom => egui::Panel::top(panel_id),
-            UiFlow::BottomToTop => egui::Panel::bottom(panel_id),
+            UiFlow::TopToBottom => egui::Panel::top(panel_id_salt),
+            UiFlow::BottomToTop => egui::Panel::bottom(panel_id_salt),
         }
         .resizable(false)
         .drag_to_open(false);
@@ -1336,7 +1343,7 @@ impl<'a> Ui<'a> {
     }
 
     pub fn search_selected_text<'q>(&self, query: &'q str) -> Option<&'q str> {
-        let state = TextEditState::load(&self.egui_ctx, Id::new("search_input"))?;
+        let state = TextEditState::load(&self.egui_ctx, Id::unique("search_input"))?;
         let range = state.cursor.char_range()?.as_sorted_char_range();
         if range.is_empty() {
             return None;
@@ -1898,39 +1905,4 @@ fn make_alpha_checkerboard_image(cell_count_per_line: usize) -> ColorImage {
     }
 
     ColorImage::new([size, size], pixels)
-}
-
-fn constrain_scroll_bar_hovering_margin(
-    ui: &egui::Ui,
-    scroll_area_id: Id,
-    scroll_bar_rect: Rect,
-    margin: f32,
-) {
-    let inset = ui
-        .ctx()
-        .global_style()
-        .interaction
-        .interact_radius
-        .min(margin);
-
-    // the scroll bar rect that egui actually uses to hit-test against
-    let bar_id = scroll_area_id.with(1);
-    let Some(bar_rect) = ui
-        .viewport(|vp| vp.this_pass.widgets.get(bar_id).copied())
-        .map(|widget| widget.rect)
-    else {
-        return;
-    };
-
-    let hovered_rect = Rect::from_min_max(
-        egui::pos2(
-            bar_rect.min.x,
-            bar_rect.min.y.max(scroll_bar_rect.min.y + inset),
-        ),
-        egui::pos2(
-            bar_rect.max.x,
-            bar_rect.max.y.min(scroll_bar_rect.max.y - inset),
-        ),
-    );
-    ui.interact(hovered_rect, bar_id, egui::Sense::HOVER);
 }

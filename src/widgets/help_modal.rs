@@ -25,7 +25,7 @@ impl HelpModal {
         let margin = 10.0;
         let spacing = 8.0;
 
-        Modal::new(Id::new("help_modal"))
+        Modal::new(Id::unique("help_modal"))
             .backdrop_color(Color32::from_black_alpha(180))
             .frame(Frame::popup(&ui.global_style()).inner_margin(0.0))
             .show(ui, |ui| {
