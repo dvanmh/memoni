@@ -1,19 +1,24 @@
 use anyhow::{Context, Result, anyhow};
 use egui::Color32;
 use egui::ecolor::ParseHexColorError;
+use indexmap::IndexSet;
 use log::{debug, info};
 use make_optional::MakeOptional;
 use regex::Regex;
-use serde::Deserialize;
-use serde_with::{DisplayFromStr, FromInto, OneOrMany, serde_as};
+use serde::{Deserialize, Deserializer, de};
+use serde_with::{DeserializeAs, DisplayFromStr, FromInto, OneOrMany, serde_as};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::fs;
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::str::FromStr;
 use xkeysym::Keysym;
 
-use crate::selection::SelectionType;
+use crate::{
+    fonts::{NOTO_MATH_CONFIG_NAME, NOTO_SANS_CONFIG_NAME, SYSTEM_FALLBACK_CONFIG_NAME},
+    selection::SelectionType,
+};
 
 #[derive(Deserialize, Debug, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -148,12 +153,12 @@ impl Default for LayoutConfig {
 #[derive(Deserialize, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct FontConfig {
-    #[serde(rename = "family")]
-    #[serde_as(as = "OneOrMany<_>")]
-    pub families: Vec<String>,
+    #[serde(alias = "family")]
+    #[serde_as(as = "NonEmptyUnique<OneOrMany<_>>")]
+    pub families: IndexSet<String>,
     pub size: f32,
     pub secondary_size: f32,
-    #[serde(rename = "y_offset_factor")]
+    #[serde(alias = "y_offset_factor")]
     #[serde_as(as = "OneOrMany<_>")]
     pub y_offset_factors: Vec<f32>,
     pub underline_offset: f32,
@@ -163,7 +168,16 @@ pub struct FontConfig {
 impl Default for FontConfig {
     fn default() -> Self {
         Self {
-            families: vec![],
+            families: IndexSet::from_iter(
+                [
+                    "sans-serif",
+                    SYSTEM_FALLBACK_CONFIG_NAME,
+                    NOTO_SANS_CONFIG_NAME,
+                    NOTO_MATH_CONFIG_NAME,
+                ]
+                .iter()
+                .map(|f| f.to_string()),
+            ),
             size: 13.0,
             secondary_size: 11.0,
             y_offset_factors: vec![],
@@ -472,4 +486,31 @@ pub struct SearchModeColor {
     pub fuzzy: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub regex: Color,
+}
+
+struct NonEmptyUnique<S>(PhantomData<S>);
+
+impl<'de, S, T> DeserializeAs<'de, IndexSet<T>> for NonEmptyUnique<S>
+where
+    S: DeserializeAs<'de, Vec<T>>,
+    T: Deserialize<'de> + Eq + std::hash::Hash + fmt::Debug,
+{
+    fn deserialize_as<D>(d: D) -> Result<IndexSet<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let items = S::deserialize_as(d)?;
+        if items.is_empty() {
+            return Err(de::Error::custom("list must not be empty"));
+        }
+
+        let mut set = IndexSet::new();
+        for item in items {
+            if let Some(dup) = set.replace(item) {
+                return Err(de::Error::custom(format!("duplicate element: {:?}", dup)));
+            }
+        }
+
+        Ok(set)
+    }
 }

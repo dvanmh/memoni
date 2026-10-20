@@ -236,13 +236,43 @@ color_preview_corner_radius = 6
 # Font configuration
 [font]
 
-# Font family name to use
+# Font families to use, in priority order
 #
-# Multiple fonts can be specified, where subsequent fonts act as fallbacks if earlier ones
+# Multiple fonts can be specified, where subsequent entries act as fallbacks if earlier ones
 # do not contain the required glyphs (e.g., for emojis or specific languages).
 #
-# default: ["Noto Sans", "Noto Emoji", "Noto Sans Math"]
-family = ["DejaVu Sans", "JetBrainsMonoNL Nerd Font"]
+# Each entry must be one of:
+#
+# - A real font family name installed on the system (as reported by e.g., `fc-list`).
+#
+# - A generic family alias:
+#     "sans-serif", "serif", "monospace", "emoji", "system-ui", "cursive", "fantasy", "math"
+#   Generic aliases resolve through the system font configuration, so a user fonts.conf like:
+#     <alias>
+#         <family>sans-serif</family>
+#         <prefer>
+#             <family>Noto Sans</family>
+#             <family>Noto Color Emoji</family>
+#         </prefer>
+#     </alias>
+#   controls which fonts they pick.
+#
+# - The bundled Noto fonts:
+#     "memoni:noto-sans"      - Noto Sans (regular Latin font)
+#     "memoni:noto-sans-math" - Noto Sans Math (for the newline symbol (↵) and the tab symbol (⇥))
+#
+# - "system-fallback": the system's font configuration is consulted on demand to pick a font
+#   for each unsupported character.
+#
+# Example:
+# - ["JetBrains Mono", "memoni:noto-sans-math", "system-fallback"] uses JetBrains Mono as
+#   the primary font, then the bundled math font for math glyphs that it lacks, and
+#   finally any system font.
+# - ["Noto Sans"] uses only that font; characters it lacks will not fall back to any
+#   system font and will be rendered as tofu boxes instead.
+#
+# default: ["sans-serif", "system-fallback", "memoni:noto-sans", "memoni:noto-sans-math"]
+families = ["DejaVu Sans", "Noto Color Emoji", "memoni:noto-sans-math", "JetBrainsMonoNL Nerd Font", "system-fallback"]
 
 # Primary text size (pt)
 #
@@ -256,9 +286,9 @@ secondary_size = 8
 
 # Additional y offset applied to text layout
 #
-# This can be a single number (applied to the first font in 'family')
+# This can be a single number (applied to the first font in 'families')
 # or an array of numbers, where each value corresponds to the y-offset for the font at the
-# matching index in the 'family' array.
+# matching index in the 'families' array.
 # For example, `y_offset_factor = [0.1, 0.0, -0.05]` would apply 0.1 to the first font,
 # 0.0 to the second, and -0.05 to the third.
 #

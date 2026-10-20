@@ -1,18 +1,17 @@
 use std::{
     collections::HashMap,
-    ffi::CString,
     fs,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, LazyLock},
+    sync::LazyLock,
     time::{Duration, Instant},
 };
 
+use crate::fonts::FontPlan;
 use anyhow::{Result, anyhow};
 use egui::{
-    Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, FontTweak,
-    FullOutput, Id, IdSalt, LayerId, Mesh, Order, Pos2, RawInput, Rect, Stroke, StrokeKind,
-    TextureHandle, TextureOptions, Vec2,
+    Color32, ColorImage, CornerRadius, FontId, FullOutput, Id, IdSalt, LayerId, Mesh, Order, Pos2,
+    RawInput, Rect, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
     emath::GuiRounding as _,
     epaint::{self, ColorMode, PathStroke},
     scroll_area::{DragScroll, ScrollSource},
@@ -20,9 +19,8 @@ use egui::{
     text_selection,
     widgets::text_edit::TextEditState,
 };
-use fontconfig::Fontconfig;
 use image::{GenericImageView, RgbaImage};
-use log::{debug, error, info, log_enabled, trace, warn};
+use log::{debug, error, info, trace, warn};
 use xdg_mime::SharedMimeInfo;
 
 use crate::{
@@ -30,6 +28,7 @@ use crate::{
     color::parse_color,
     config::{Config, Dimensions, LayoutConfig},
     ext::RectExt as _,
+    fonts,
     freedesktop_cache::get_cached_thumbnail,
     keymap_spec::{KeyChord, ScrollAction},
     ordered_hash_map::{OrderedHashMap, OrderedHashMapView},
@@ -103,19 +102,6 @@ struct Fallback {
     unknown: RgbaImage,
 }
 
-const NOTO_SANS: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/assets/fonts/Noto_Sans/NotoSans-Regular.ttf"
-));
-const NOTO_MATH: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/assets/fonts/Noto_Sans_Math/NotoSansMath-Regular.ttf"
-));
-const NOTO_EMOJI: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/assets/fonts/Noto_Emoji/NotoEmoji-Regular.ttf"
-));
-
 #[derive(Debug)]
 struct ScrollAreaInfo {
     id: Option<egui::Id>,
@@ -144,7 +130,7 @@ struct UiState {
 pub struct Ui<'a> {
     pub egui_ctx: Rc<egui::Context>,
     config: &'a Config,
-    fonts: FontDefinitions,
+    font_plan: FontPlan,
     button_widgets: HashMap<u64, ClipboardButton>,
     fallback: Fallback,
     help_modal: HelpModal,
@@ -162,59 +148,12 @@ pub struct Ui<'a> {
 
 impl<'a> Ui<'a> {
     pub fn new(config: &'a Config) -> Result<Self> {
-        info!("creating egui context");
-        let egui_ctx = Self::create_egui_context(config);
+        debug!("building font plan");
         let font = &config.font;
-        let mut fonts = FontDefinitions::default();
+        let font_plan = fonts::plan(&font.families, &font.y_offset_factors)?;
 
-        info!("setting default fonts");
-        fonts.font_data.insert(
-            "NotoSans-Regular".to_owned(),
-            Arc::new(FontData::from_static(NOTO_SANS)),
-        );
-        fonts.font_data.insert(
-            "NotoEmoji-Regular".to_owned(),
-            Arc::new(FontData::from_static(NOTO_EMOJI).tweak(FontTweak {
-                scale: 0.81,
-                ..Default::default()
-            })),
-        );
-        // Mostly for the newline symbol (↵) and the tab symbol (⇥)
-        fonts.font_data.insert(
-            "NotoSansMath-Regular".to_owned(),
-            Arc::new(FontData::from_static(NOTO_MATH)),
-        );
-
-        let mut font_family_names = vec![];
-
-        if !font.families.is_empty() {
-            info!("setting custom fonts")
-        }
-        for (i, font_family) in font.families.iter().enumerate() {
-            if let Some(font_path) = Self::find_font(font_family)? {
-                debug!("found font family '{font_family}' file: {font_path:?}");
-                fonts.font_data.insert(
-                    font_family.clone(),
-                    Arc::new(FontData::from_owned(fs::read(font_path)?).tweak(FontTweak {
-                        y_offset_factor: *font.y_offset_factors.get(i).unwrap_or(&0.0),
-                        ..Default::default()
-                    })),
-                );
-
-                font_family_names.push(font_family.clone());
-            } else {
-                warn!("font family '{font_family}' not found");
-            }
-        }
-
-        font_family_names.push("NotoSans-Regular".to_owned());
-        font_family_names.push("NotoEmoji-Regular".to_owned());
-        font_family_names.push("NotoSansMath-Regular".to_owned());
-
-        fonts
-            .families
-            .insert(FontFamily::Proportional, font_family_names);
-        egui_ctx.set_fonts(fonts.clone());
+        info!("creating egui context");
+        let egui_ctx = Self::create_egui_context(config, &font_plan);
 
         debug!("loading fallback images");
         let fallback_img = image::load_from_memory(FALLBACK_IMG_BYTES)?.to_rgba8();
@@ -232,7 +171,7 @@ impl<'a> Ui<'a> {
         Ok(Ui {
             egui_ctx: Rc::new(egui_ctx),
             config,
-            fonts,
+            font_plan,
             button_widgets: HashMap::new(),
             fallback: Fallback {
                 image: fallback_img,
@@ -272,19 +211,23 @@ impl<'a> Ui<'a> {
 
     pub fn reset_context(&mut self) {
         info!("recreating egui context");
-        let egui_ctx = Self::create_egui_context(self.config);
-        egui_ctx.set_fonts(self.fonts.clone());
+        let egui_ctx = Self::create_egui_context(self.config, &self.font_plan);
         self.egui_ctx = Rc::new(egui_ctx);
 
         debug!("clearing button widgets");
         self.button_widgets.clear();
     }
 
-    fn create_egui_context(config: &Config) -> egui::Context {
+    fn create_egui_context(config: &Config, font_plan: &FontPlan) -> egui::Context {
         let egui_ctx = egui::Context::default();
         let layout = &config.layout;
         let font = &config.font;
         let theme = &config.theme;
+
+        egui_ctx.set_fonts(font_plan.definitions.clone());
+        for provider in &font_plan.providers {
+            egui_ctx.add_font_provider(provider.clone());
+        }
 
         info!("setting global egui style");
         egui_ctx.global_style_mut(|style| {
@@ -336,26 +279,6 @@ impl<'a> Ui<'a> {
         });
 
         egui_ctx
-    }
-
-    fn find_font(font_family: &str) -> Result<Option<PathBuf>> {
-        let fc = Fontconfig::new().ok_or(anyhow!("failed to initialize fontconfig"))?;
-
-        let mut pat = fontconfig::Pattern::new(&fc);
-        let family = CString::new(font_family)?;
-        pat.add_string(fontconfig::FC_FAMILY, &family);
-        pat.add_integer(fontconfig::FC_WEIGHT, fontconfig::FC_WEIGHT_REGULAR);
-        pat.add_integer(fontconfig::FC_SLANT, fontconfig::FC_SLANT_ROMAN);
-        pat.add_integer(fontconfig::FC_WIDTH, fontconfig::FC_WIDTH_NORMAL);
-        let fonts = fontconfig::list_fonts(&pat, None);
-
-        if log_enabled!(log::Level::Trace) {
-            trace!("found all fonts with pattern {pat:?}:");
-            fonts.print();
-        }
-
-        let font = fonts.iter().next();
-        Ok(font.and_then(|f| f.filename().map(PathBuf::from)))
     }
 
     #[allow(clippy::too_many_arguments)]
