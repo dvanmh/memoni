@@ -241,8 +241,21 @@ color_preview_corner_radius = 6
 # Multiple fonts can be specified, where subsequent fonts act as fallbacks if earlier ones
 # do not contain the required glyphs (e.g., for emojis or specific languages).
 #
-# default: ["Noto Sans", "Noto Emoji", "Noto Sans Math"]
-family = ["DejaVu Sans", "JetBrainsMonoNL Nerd Font"]
+# Each entry must be a real font family name installed on the system (as reported by e.g., `fc-list`),
+# or a generic family alias. Generic aliases are:
+#   "sans-serif", "serif", "monospace", "emoji", "system-ui", "cursive", "fantasy", "math"
+# Generic aliases resolve through the system fontconfig configuration, so a user fonts.conf like:
+#   <alias>
+#       <family>sans-serif</family>
+#       <prefer>
+#           <family>Noto Sans</family>
+#           <family>Noto Color Emoji</family>
+#       </prefer>
+#   </alias>
+# controls which fonts they pick.
+#
+# default: system sans-serif fonts are used, with the bundled Noto Sans/Noto Sans Math as a last resort
+family = ["DejaVu Sans", "Noto Color Emoji", "JetBrainsMonoNL Nerd Font"]
 
 # Primary text size (pt)
 #

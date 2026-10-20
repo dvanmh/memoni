@@ -2,6 +2,7 @@ pub mod atspi_caret_tracker;
 pub mod color;
 pub mod config;
 pub mod ext;
+pub mod fonts;
 pub mod freedesktop_cache;
 pub mod html_parser;
 pub mod input;
