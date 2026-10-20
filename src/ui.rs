@@ -63,7 +63,7 @@ struct ImageInfo {
     size: Option<(u32, u32)>,
 }
 
-const TOAST_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
+const TOAST_MESSAGE_TIMEOUT: Duration = Duration::from_millis(1200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToastKind {
