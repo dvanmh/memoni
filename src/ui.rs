@@ -387,11 +387,11 @@ impl<'a> Ui<'a> {
                         self.bookmark_ribbon(ui);
                     }
 
-                    self.scroll_area(ui, flow, *active_id, scroll_offset, scrolloff, |sf, ui, current_offset| -> Result<()> {
+                    self.scroll_area(ui, flow, *active_id, scroll_offset, scrolloff, |sf, ui, current_offset, origin_shift| -> Result<()> {
                         let quick_paste_base = sf.compute_quick_paste_base_idx(
                             flow,
                             selection_items,
-                            ui.clip_rect(),
+                            ui.clip_rect().translate(egui::vec2(0.0, -origin_shift)),
                             current_offset,
                         );
                         sf.quick_paste_base_idx = quick_paste_base;
@@ -759,7 +759,7 @@ impl<'a> Ui<'a> {
         active_id: u64,
         forced_scroll_offset: Option<f32>,
         scrolloff: f32,
-        add_contents: impl FnOnce(&mut Self, &mut egui::Ui, f32) -> R,
+        add_contents: impl FnOnce(&mut Self, &mut egui::Ui, f32, f32) -> R,
     ) -> R {
         let LayoutConfig {
             window_padding: padding,
@@ -818,13 +818,26 @@ impl<'a> Ui<'a> {
 
         let mut forced_scroll_offset = forced_scroll_offset;
 
-        // Scroll active item into view if it's goes out of view.
-        // During momentum scrolling, the pointer can hover over an item near the edge
-        // of the window and make it active. Avoid scrolling that item into view while
-        // the list is moving, because that would reset its velocity and stop the scroll.
         let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
-        let active_next_rect = active_prev_rect.map(|r| self.next_item_rect(*r, flow, next_offset));
         let next_scroll_rect = ui.available_rect_before_wrap();
+
+        // The search panel resizing the viewport in the same pass shifts every item's window
+        // position, so compensate the shift when comparing rects against the next viewport.
+        let viewport_origin_shift = next_scroll_rect.min.y - prev_scroll_rect.min.y;
+        let active_next_rect = active_prev_rect.map(|r| {
+            self.next_item_rect(*r, flow, next_offset)
+                .translate(egui::vec2(0.0, viewport_origin_shift))
+        });
+
+        // The viewport can grow (e.g. search panel collapsing) in this same pass, making
+        // the offset exceed the new max. Force the clamped offset so the content isn't
+        // painted with empty space at the bottom in that pass.
+        let next_offset_max = (prev_content_size - next_scroll_rect.height()).max(0.0);
+        if !is_prev_scrolling && next_offset > next_offset_max {
+            forced_scroll_offset = Some(next_offset_max);
+        }
+        let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
+
         if !is_prev_scrolling
             && let Some(active_rect) = active_next_rect
             && let unpadded_scroll_rect =
@@ -878,7 +891,9 @@ impl<'a> Ui<'a> {
             (
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(padding.x, padding.y))
-                    .show(ui, |ui| add_contents(self, ui, current_offset))
+                    .show(ui, |ui| {
+                        add_contents(self, ui, current_offset, viewport_origin_shift)
+                    })
                     .inner,
                 current_offset,
             )
