@@ -839,9 +839,15 @@ impl<'a> Ui<'a> {
 
         // The viewport can grow (e.g. search panel collapsing) in this same pass, making
         // the offset exceed the new max. Force the clamped offset so the content isn't
-        // painted with empty space at the bottom in that pass.
+        // painted with empty space at the bottom in that pass. Only when the viewport
+        // geometry changed in this pass: dragging the list past its limit (rubber-banding)
+        // eats into the same offset range with an unchanged viewport, and clamping it here
+        // would snap the drag back and kill the overscroll.
         let next_offset_max = (prev_content_size - next_scroll_rect.height()).max(0.0);
-        if !is_prev_scrolling && next_offset > next_offset_max {
+        if !is_prev_scrolling
+            && next_scroll_rect.height() != prev_scroll_rect.height()
+            && next_offset > next_offset_max
+        {
             forced_scroll_offset = Some(next_offset_max);
         }
 
