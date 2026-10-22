@@ -817,13 +817,21 @@ impl<'a> Ui<'a> {
             .scroll_bar_rect(scroll_bar_rect);
 
         let mut forced_scroll_offset = forced_scroll_offset;
-
-        let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
         let next_scroll_rect = ui.available_rect_before_wrap();
 
         // The search panel resizing the viewport in the same pass shifts every item's window
         // position, so compensate the shift when comparing rects against the next viewport.
         let viewport_origin_shift = next_scroll_rect.min.y - prev_scroll_rect.min.y;
+
+        // Compensating the origin shift in the scroll offset keeps the content at the same
+        // window position, so the shift no longer moves it.
+        let origin_shift_compensated =
+            !is_prev_scrolling && viewport_origin_shift != 0.0 && forced_scroll_offset.is_none();
+        if origin_shift_compensated {
+            forced_scroll_offset = Some((prev_offset + viewport_origin_shift).max(0.0));
+        }
+
+        let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
         let active_next_rect = active_prev_rect.map(|r| {
             self.next_item_rect(*r, flow, next_offset)
                 .translate(egui::vec2(0.0, viewport_origin_shift))
