@@ -893,7 +893,8 @@ impl<'a> Ui<'a> {
         let rounded_offset = current_offset
             .round_to_pixels(ui.pixels_per_point())
             .round_ui();
-        let is_scrolling = self.prev_pass.scroll_output.offset != rounded_offset;
+        let is_scrolling =
+            forced_scroll_offset.is_none() && self.prev_pass.scroll_output.offset != rounded_offset;
         self.prev_pass.scroll_output = ScrollAreaInfo {
             id: Some(output.id),
             content_size: output.content_size.y,
