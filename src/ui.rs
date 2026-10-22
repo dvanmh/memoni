@@ -844,6 +844,23 @@ impl<'a> Ui<'a> {
         if !is_prev_scrolling && next_offset > next_offset_max {
             forced_scroll_offset = Some(next_offset_max);
         }
+
+        // With BottomToTop flow and non-overflowing content, the bottom-aligned forced offset
+        // pins the content's bottom to the *previous* viewport's bottom edge. When the
+        // viewport grows downward in this same pass (e.g. search panel collapsing), its
+        // bottom edge moves before the offset is recomputed, leaving the collapsed panel
+        // space briefly empty. Translate the offset by the same amount so the content
+        // stays pinned to the new bottom edge.
+        let bottom_edge_shift = next_scroll_rect.max.y - prev_scroll_rect.max.y;
+        if !is_prev_scrolling
+            && bottom_edge_shift != 0.0
+            && flow == UiFlow::BottomToTop
+            && !is_prev_overflow
+            && let Some(offset) = forced_scroll_offset
+        {
+            forced_scroll_offset = Some(offset - bottom_edge_shift);
+        }
+
         let next_offset = forced_scroll_offset.unwrap_or(prev_offset);
 
         if !is_prev_scrolling
