@@ -838,13 +838,13 @@ impl<'a> Ui<'a> {
             let scrolloff_rect = unpadded_scroll_rect.shrink2(egui::vec2(0.0, scrolloff));
             if !scrolloff_rect.contains_rect(active_rect) {
                 debug!("scrolling active item into view");
-                let desired_offset = if active_rect.top() < scrolloff_rect.top() {
+                let desired_offset = (if active_rect.top() < scrolloff_rect.top() {
                     active_rect.top() + next_offset - padding.y as f32 - scrolloff
                 } else {
                     active_rect.bottom() + next_offset + scrolloff
                         - unpadded_scroll_rect.height()
                         - padding.y as f32
-                };
+                }) - next_scroll_rect.min.y;
                 if scrolloff > 0.0 {
                     // Clamped offset may not honor the scrolloff margin (e.g. near list ends),
                     // skip forcing it to avoid resetting the scroll velocity every frame
