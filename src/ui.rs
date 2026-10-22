@@ -104,7 +104,6 @@ struct Fallback {
 
 #[derive(Debug)]
 struct ScrollAreaInfo {
-    id: Option<egui::Id>,
     content_size: f32,
     inner_rect: Rect,
     offset: f32,
@@ -191,7 +190,6 @@ impl<'a> Ui<'a> {
             prev_pass: PrevPass {
                 flow: None,
                 scroll_output: ScrollAreaInfo {
-                    id: None,
                     content_size: 0.0,
                     inner_rect: Rect::ZERO,
                     offset: 0.0,
@@ -905,12 +903,6 @@ impl<'a> Ui<'a> {
 
         if let Some(offset) = forced_scroll_offset {
             scroll_area = scroll_area.vertical_scroll_offset(offset);
-
-            if let Some(prev_scroll_id) = self.prev_pass.scroll_output.id
-                && let Err(err) = egui::scroll_area::State::reset_velocity(ui, prev_scroll_id)
-            {
-                debug!("failed to reset main scroll area velocity: {err}");
-            }
         }
 
         let output = scroll_area.show_viewport(ui, |ui, vp| {
@@ -932,6 +924,12 @@ impl<'a> Ui<'a> {
 
         let (response, current_offset) = output.inner;
 
+        if forced_scroll_offset.is_some()
+            && let Err(err) = egui::scroll_area::State::reset_velocity(ui, output.id)
+        {
+            debug!("failed to reset main scroll area velocity: {err}");
+        }
+
         if output.content_size.y != prev_content_size {
             ui.request_discard("Recalculate various stuffs that are based on content size");
         }
@@ -942,7 +940,6 @@ impl<'a> Ui<'a> {
         let is_scrolling =
             forced_scroll_offset.is_none() && self.prev_pass.scroll_output.offset != rounded_offset;
         self.prev_pass.scroll_output = ScrollAreaInfo {
-            id: Some(output.id),
             content_size: output.content_size.y,
             inner_rect: output.inner_rect,
             offset: rounded_offset,
