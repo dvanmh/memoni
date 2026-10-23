@@ -384,6 +384,16 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Key(KeyAction::SwitchIme)),
             ),
             KeymapEntry::new(
+                &["Super-Period"],
+                "Trigger unicode input",
+                plain!(Action::Key(KeyAction::TriggerUnicode)),
+            ),
+            KeymapEntry::new(
+                &["M-Super-Period"],
+                "Trigger unicode input in hex number",
+                plain!(Action::Key(KeyAction::TriggerUnicodeHex)),
+            ),
+            KeymapEntry::new(
                 &["Esc", "C-g"],
                 "Exit search",
                 plain!(Action::Key(KeyAction::Close)),
@@ -716,6 +726,8 @@ pub enum KeyAction {
     CycleSearchMode,
     CopySearchSelection,
     SwitchIme,
+    TriggerUnicode,
+    TriggerUnicodeHex,
     ShowHelp,
     SimpleScroll(SimpleScrollAction),
     Close,

@@ -57,6 +57,8 @@ pub struct Config {
     pub middle_click_delay_patterns: Vec<Regex>,
 
     pub switch_ime_command: Option<String>,
+    pub ime_unicode_input_command: Option<String>,
+    pub ime_unicode_hex_input_command: Option<String>,
 
     #[optional(optional_type)]
     pub layout: LayoutConfig,
@@ -80,6 +82,8 @@ impl Default for Config {
             middle_click_delay_windows: vec!["^[Ff]irefox".to_string()],
             middle_click_delay_patterns: vec![],
             switch_ime_command: None,
+            ime_unicode_input_command: None,
+            ime_unicode_hex_input_command: None,
             layout: Default::default(),
             font: Default::default(),
             theme: Default::default(),

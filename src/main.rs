@@ -605,6 +605,12 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     &mut paste_intent,
                 );
 
+                if let Some(cursor_rect) =
+                    full_output.platform_output.ime.map(|ime| ime.cursor_rect)
+                {
+                    input.update_xim_cursor_rect(cursor_rect)?;
+                }
+
                 let cursor_icon = full_output.platform_output.cursor_icon;
                 window.change_pointer_icon(x11_cursor_name(cursor_icon))?;
 
@@ -846,6 +852,46 @@ fn handle_key_action(
                 });
             }
             None => warn!("received IME switch keymap but switch_ime_command is not configured"),
+        },
+        KeyAction::TriggerUnicode => match &config.ime_unicode_input_command {
+            Some(command) => {
+                debug!("triggering IME unicode input with command: {command:?}");
+                let command = command.clone();
+                std::thread::spawn(move || {
+                    let result = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&command)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    if let Err(e) = result {
+                        warn!("failed to run unicode input trigger command: {e}");
+                    }
+                });
+            }
+            None => warn!(
+                "received unicode input trigger keymap but ime_unicode_input_command is not configured"
+            ),
+        },
+        KeyAction::TriggerUnicodeHex => match &config.ime_unicode_hex_input_command {
+            Some(command) => {
+                debug!("triggering IME unicode hex input with command: {command:?}");
+                let command = command.clone();
+                std::thread::spawn(move || {
+                    let result = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&command)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                    if let Err(e) = result {
+                        warn!("failed to run unicode hex input trigger command: {e}");
+                    }
+                });
+            }
+            None => warn!(
+                "received unicode hex input trigger keymap but ime_unicode_hex_input_command is not configured"
+            ),
         },
         KeyAction::ShowHelp => {
             info!("switching to Help mode");

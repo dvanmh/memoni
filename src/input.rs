@@ -21,7 +21,7 @@ use x11rb::{
     },
     xcb_ffi::XCBConnection,
 };
-use xim::{Client as _, ClientError};
+use xim::{AttributeName, Client as _, ClientError, Point, Rectangle};
 use xkeysym::Keysym;
 
 type XimClient<'a> = xim::x11rb::X11rbClient<&'a XCBConnection>;
@@ -42,6 +42,7 @@ pub struct Input<'a> {
 
     xim_watch: Option<XimWatch>,
     xim_server_owner: Option<Window>,
+    xim_cursor_rect: Option<Rect>,
 }
 
 impl<'a> Input<'a> {
@@ -93,6 +94,7 @@ impl<'a> Input<'a> {
 
             xim_watch,
             xim_server_owner,
+            xim_cursor_rect: None,
         })
     }
 
@@ -146,6 +148,12 @@ impl<'a> Input<'a> {
                 // Search mode may have been entered while disconnected, in which case set_focus was never sent
                 if emit_text_events && let Some(xim_client) = self.xim_client.as_mut() {
                     xim_client.set_focus(self.xim_handler.im_id, self.xim_handler.ic_id)?;
+                    send_cursor_rect(
+                        xim_client,
+                        self.xim_handler.im_id,
+                        self.xim_handler.ic_id,
+                        &self.xim_cursor_rect,
+                    )?;
                 }
             }
 
@@ -386,11 +394,40 @@ impl<'a> Input<'a> {
 
         if emit_text_events {
             xim_client.set_focus(self.xim_handler.im_id, self.xim_handler.ic_id)?;
+            send_cursor_rect(
+                xim_client,
+                self.xim_handler.im_id,
+                self.xim_handler.ic_id,
+                &self.xim_cursor_rect,
+            )?;
         } else {
             xim_client.unset_focus(self.xim_handler.im_id, self.xim_handler.ic_id)?;
         }
 
         Ok(())
+    }
+
+    pub fn update_xim_cursor_rect(&mut self, cursor_rect: Rect) -> Result<()> {
+        if Some(cursor_rect) == self.xim_cursor_rect {
+            return Ok(());
+        }
+
+        trace!("setting xim cursor rect to {cursor_rect:?}");
+        self.xim_cursor_rect = Some(cursor_rect);
+
+        if !self.xim_handler.connected {
+            return Ok(());
+        }
+        let Some(xim_client) = self.xim_client.as_mut() else {
+            return Ok(());
+        };
+
+        send_cursor_rect(
+            xim_client,
+            self.xim_handler.im_id,
+            self.xim_handler.ic_id,
+            &self.xim_cursor_rect,
+        )
     }
 
     pub fn update_pointer_pos(&mut self) -> Result<()> {
@@ -487,4 +524,37 @@ fn try_connect_xim_server<'a>(
         Err(ClientError::NoXimServer | ClientError::InvalidReply) => Ok(None),
         Err(e) => Err(e.into()),
     }
+}
+
+fn send_cursor_rect(
+    xim_client: &mut XimClient<'_>,
+    im_id: u16,
+    ic_id: u16,
+    cursor_rect: &Option<Rect>,
+) -> Result<()> {
+    let Some(r) = cursor_rect else {
+        return Ok(());
+    };
+
+    let spot = Point {
+        x: r.right().round() as _,
+        y: r.bottom().round() as _,
+    };
+    let area = Rectangle {
+        x: r.left().round() as _,
+        y: r.top().round() as _,
+        width: r.width().round() as _,
+        height: r.height().round() as _,
+    };
+
+    let attrs = xim_client
+        .build_ic_attributes()
+        .nested_list(AttributeName::PreeditAttributes, |b| {
+            b.push(AttributeName::SpotLocation, spot)
+                .push(AttributeName::Area, area);
+        })
+        .build();
+    xim_client.set_ic_values(im_id, ic_id, attrs)?;
+
+    Ok(())
 }
