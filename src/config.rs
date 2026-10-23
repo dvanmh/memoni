@@ -48,6 +48,8 @@ pub struct Config {
     #[serde_as(as = "OneOrMany<_>")]
     pub window_position_mode: Vec<WindowPositionMode>,
 
+    pub text_caret_command: Option<String>,
+
     #[serde_as(as = "HashMap<_, OneOrMany<_>>")]
     pub app_paste_keymaps: HashMap<String, Vec<KeyStroke>>,
 
@@ -78,6 +80,7 @@ impl Default for Config {
             scroll_off: 0.0,
             show_quick_paste_hint: true,
             window_position_mode: vec![],
+            text_caret_command: None,
             app_paste_keymaps: Default::default(),
             middle_click_delay_windows: vec!["^[Ff]irefox".to_string()],
             middle_click_delay_patterns: vec![],

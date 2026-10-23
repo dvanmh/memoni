@@ -51,6 +51,24 @@ show_quick_paste_hint = true
 # default: CLIPBOARD - ["monitor"], PRIMARY - ["pointer"]
 window_position_mode = ["text_caret", "monitor"]
 
+# Command to query the text caret position
+#
+# AT-SPI's caret position tracking is unreliable or even unavailable in some
+# applications, so when this is set, the "text_caret" window positioning mode
+# queries the caret position by running this command through "sh -c" right before
+# the window is shown, instead of tracking it continuously through AT-SPI.
+#
+# The command must print exactly four whitespace-separated numbers: "x y w h" in
+# screen coordinates. If the command fails or prints anything else, the next
+# positioning mode is tried as usual.
+#
+# Example: if you use fcitx5, the fcitx5-cursorrect/ directory in memoni's repository
+# contains an example addon that exposes a D-Bus method returning the focused input
+# context's cursor rectangle (see its README for build and install instructions).
+#
+# default: unset
+text_caret_command = "busctl --user call org.fcitx.Fcitx5 /cursorrect org.fcitx.Fcitx.CursorRect GetCursorRect | cut -d ' ' -f2-"
+
 # Window classes that need middle-click paste delay
 #
 # Some windows (e.g., Firefox) don't receive paste event if memoni middle-clickes immediately

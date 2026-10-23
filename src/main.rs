@@ -21,6 +21,7 @@ use memoni::{opengl_context::OpenGLContext, selection::SelectionType};
 use mio::{Waker, unix::SourceFd};
 use signal_hook::consts::TERM_SIGNALS;
 use signal_hook_mio::v1_0::Signals;
+use xkeysym::Keysym;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::{
     ffi::OsStr,
@@ -32,7 +33,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use x11rb::connection::Connection;
+use x11rb::{connection::Connection, protocol::{xproto::KEY_RELEASE_EVENT, xtest::ConnectionExt as _}, wrapper::ConnectionExt as _};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::Mapping;
 use x11rb::xcb_ffi::XCBConnection;
@@ -257,9 +258,15 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
         ui.build_button_widget(item)?;
     }
 
-    let text_caret_tracking_enabled = config
+    let text_caret_requested = config
         .window_position_mode
         .contains(&WindowPositionMode::TextCaret);
+    let text_caret_command = if text_caret_requested {
+        config.text_caret_command.clone()
+    } else {
+        None
+    };
+    let text_caret_tracking_enabled = text_caret_requested && text_caret_command.is_none();
     let mut sources = match create_poll(&window.conn, socket_path, text_caret_tracking_enabled) {
         Ok(res) => res,
         Err(err) => {
@@ -506,11 +513,22 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
             if will_show_window {
                 state.mode = AppMode::Normal;
                 state.bookmark_view = false;
+                state.active_id = selection.history.first_unpinned_id();
+
+                if let Some(command) = &text_caret_command {
+                    match query_text_caret(command) {
+                        Some((x, y, caret_height)) => window.set_text_caret(x, y, caret_height),
+                        None => {
+                            debug!("text caret command did not return a usable position");
+                            window.clear_text_caret();
+                        }
+                    }
+                }
+
                 window.update_window_pos()?;
                 input.update_pointer_pos()?;
                 ui.reset();
                 search.reset();
-                state.active_id = selection.history.first_unpinned_id();
             }
 
             if state.first_loop || items_updated || state.window_shown || will_show_window {
@@ -1132,4 +1150,39 @@ struct PollSources {
     keyboard_grab_timer: TimerfdSource,
     pointer_grab_timer: TimerfdSource,
     caret_tracker_channel: Option<Arc<atspi_caret_tracker::EventChannel<CaretTrackerEvent>>>,
+}
+
+fn query_text_caret(command: &str) -> Option<(i32, i32, i32)> {
+    debug!("querying text caret position with command: {command:?}");
+    let output = match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            debug!("text caret command failed: {err:?}");
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        debug!("text caret command exited with failure: {output:?}");
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    debug!("text caret command result: {stdout:?}");
+
+    let mut values = stdout.split_whitespace();
+    let x: i32 = values.next()?.parse().ok()?;
+    let y: i32 = values.next()?.parse().ok()?;
+    let _w: i32 = values.next()?.parse().ok()?;
+    let h: i32 = values.next()?.parse().ok()?;
+    if values.next().is_some() {
+        debug!("text caret command printed more than four values");
+        return None;
+    }
+
+    Some((x, y, h))
 }
