@@ -21,7 +21,6 @@ use memoni::{opengl_context::OpenGLContext, selection::SelectionType};
 use mio::{Waker, unix::SourceFd};
 use signal_hook::consts::TERM_SIGNALS;
 use signal_hook_mio::v1_0::Signals;
-use xkeysym::Keysym;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::{
     ffi::OsStr,
@@ -33,7 +32,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use x11rb::{connection::Connection, protocol::{xproto::KEY_RELEASE_EVENT, xtest::ConnectionExt as _}, wrapper::ConnectionExt as _};
+use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::Mapping;
 use x11rb::xcb_ffi::XCBConnection;
