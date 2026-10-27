@@ -630,30 +630,32 @@ impl<'a> X11Window<'a> {
         let (x1, x2) = (x1.min(x2), x1.max(x2));
         let (y1, y2) = (y1.min(y2), y1.max(y2));
 
-        let clamp_x = |v: i32| v.clamp(min_x, max_x);
-        let clamp_y = |v: i32| v.clamp(min_y, max_y);
+        let pick_closest = |preferred: i32, alternative: i32, min: i32, max: i32| {
+            let preferred_clamped = preferred.clamp(min, max);
+            let alternative_clamped = alternative.clamp(min, max);
+            if preferred_clamped == preferred {
+                (preferred, false)
+            } else if alternative_clamped == alternative {
+                (alternative, true)
+            } else if preferred - preferred_clamped <= alternative_clamped - alternative {
+                (preferred_clamped, false)
+            } else {
+                (alternative_clamped, true)
+            }
+        };
 
         let place = |gap: i32| {
-            let place_right = x2 + gap + win_width <= max_x + win_width;
-            let place_below = y2 + gap + win_height <= max_y + win_height;
+            let right = x2 + gap;
+            let left = x1 - win_width - gap;
+            let (x, _) = pick_closest(right, left, min_x, max_x);
 
-            let unclamped_x = if place_right {
-                x2 + gap
-            } else {
-                x1 - win_width - gap
-            };
-            let unclamped_y = if place_below {
-                y2 + gap
-            } else {
-                y1 - win_height - gap
-            };
+            let below = y2 + gap;
+            let above = y1 - win_height - gap;
+            let (y, placed_above) = pick_closest(below, above, min_y, max_y);
 
-            (
-                clamp_x(unclamped_x),
-                clamp_y(unclamped_y),
-                unclamped_x != clamp_x(unclamped_x) || unclamped_y != clamp_y(unclamped_y),
-                !place_below,
-            )
+            let clamped = (x != right && x != left) || (y != below && y != above);
+
+            (x, y, clamped, placed_above)
         };
 
         let (x, y, clamped, above) = place(gap);
