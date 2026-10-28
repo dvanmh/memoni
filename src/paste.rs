@@ -18,7 +18,7 @@ use crate::{
     keymap_spec::PasteModifier,
     selection::SelectionType,
     selection_item::SelectionData,
-    utils::is_plaintext_mime,
+    utils::{get_x11_window_class, is_plaintext_mime},
     x11_key_converter::X11KeyConverter,
     x11_window::X11Window,
 };
@@ -450,7 +450,7 @@ impl<'a> PasteServer<'a> {
             let app_paste_keymaps = &self.config.app_paste_keymaps;
             // Focus may be PointerRoot/None or the window may already be gone;
             // fall back to the default keymap instead of failing the paste.
-            let window_class = get_window_class(conn, focused_window)
+            let window_class = get_x11_window_class(conn, focused_window)
                 .inspect_err(|e| {
                     warn!("failed to get class of focused window {focused_window}: {e}")
                 })
@@ -492,7 +492,7 @@ impl<'a> PasteServer<'a> {
             let need_delay = original_pointer
                 .2
                 .and_then(|win| {
-                    get_window_class(conn, win)
+                    get_x11_window_class(conn, win)
                         .inspect_err(|e| warn!("failed to get class of window under pointer: {e}"))
                         .ok()
                         .flatten()
@@ -555,31 +555,6 @@ fn get_or_create_mime_atom(
     let atom = conn.intern_atom(false, name.as_bytes())?.reply()?.atom;
     mime_atoms.insert(name.to_string(), atom);
     Ok(atom)
-}
-
-fn get_window_class(conn: &XCBConnection, window: Window) -> Result<Option<(String, String)>> {
-    let reply: GetPropertyReply = conn
-        .get_property(
-            false,
-            window,
-            AtomEnum::WM_CLASS,
-            AtomEnum::STRING,
-            0,
-            u32::MAX,
-        )?
-        .reply()?;
-
-    if reply.value_len == 0 {
-        return Ok(None);
-    }
-
-    let value = String::from_utf8_lossy(&reply.value).into_owned();
-    let mut parts = value.split('\0');
-
-    let instance_name = parts.next().unwrap_or("").to_string();
-    let class_name = parts.next().unwrap_or("").to_string();
-
-    Ok(Some((instance_name, class_name)))
 }
 
 #[allow(clippy::type_complexity)]

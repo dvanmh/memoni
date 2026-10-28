@@ -1,6 +1,11 @@
 use std::borrow::Cow;
 
+use anyhow::Result;
 use egui::{CursorIcon, Key};
+use x11rb::{
+    protocol::xproto::{AtomEnum, ConnectionExt as _, GetPropertyReply},
+    xcb_ffi::XCBConnection,
+};
 use xkeysym::Keysym;
 
 pub fn keysym_to_egui_key(ks: Keysym) -> Option<Key> {
@@ -357,4 +362,29 @@ pub fn x11_cursor_name(icon: CursorIcon) -> &'static str {
         Move => "move",
         _ => "default",
     }
+}
+
+pub fn get_x11_window_class(conn: &XCBConnection, window: u32) -> Result<Option<(String, String)>> {
+    let reply: GetPropertyReply = conn
+        .get_property(
+            false,
+            window,
+            AtomEnum::WM_CLASS,
+            AtomEnum::STRING,
+            0,
+            u32::MAX,
+        )?
+        .reply()?;
+
+    if reply.value_len == 0 {
+        return Ok(None);
+    }
+
+    let value = String::from_utf8_lossy(&reply.value).into_owned();
+    let mut parts = value.split('\0');
+
+    let instance_name = parts.next().unwrap_or("").to_string();
+    let class_name = parts.next().unwrap_or("").to_string();
+
+    Ok(Some((instance_name, class_name)))
 }

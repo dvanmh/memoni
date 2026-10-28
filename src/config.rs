@@ -4,7 +4,7 @@ use egui::ecolor::ParseHexColorError;
 use indexmap::IndexSet;
 use log::{debug, info};
 use make_optional::MakeOptional;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Deserializer, de};
 use serde_with::{DeserializeAs, DisplayFromStr, FromInto, OneOrMany, serde_as};
 use std::collections::HashMap;
@@ -54,9 +54,12 @@ pub struct Config {
     pub app_paste_keymaps: HashMap<String, Vec<KeyStroke>>,
 
     pub middle_click_delay_windows: Vec<String>,
-
     #[serde(skip)]
     pub middle_click_delay_patterns: Vec<Regex>,
+
+    pub blocked_windows: Vec<String>,
+    #[serde(skip)]
+    pub blocked_window_patterns: Vec<Regex>,
 
     pub switch_ime_command: Option<String>,
     pub ime_unicode_input_command: Option<String>,
@@ -84,6 +87,8 @@ impl Default for Config {
             app_paste_keymaps: Default::default(),
             middle_click_delay_windows: vec!["^[Ff]irefox".to_string()],
             middle_click_delay_patterns: vec![],
+            blocked_windows: vec![],
+            blocked_window_patterns: vec![],
             switch_ime_command: None,
             ime_unicode_input_command: None,
             ime_unicode_hex_input_command: None,
@@ -333,6 +338,7 @@ impl Config {
             });
 
         config.compile_middle_click_delay_patterns()?;
+        config.compile_blocked_window_patterns()?;
 
         debug!("config: {config:#?}");
         Ok(config)
@@ -346,6 +352,20 @@ impl Config {
                 Regex::new(pattern).with_context(|| {
                     format!("invalid middle_click_delay_windows regex: {pattern:?}")
                 })
+            })
+            .collect::<Result<_>>()?;
+        Ok(())
+    }
+
+    fn compile_blocked_window_patterns(&mut self) -> Result<()> {
+        self.blocked_window_patterns = self
+            .blocked_windows
+            .iter()
+            .map(|pattern| {
+                RegexBuilder::new(pattern)
+                    .case_insensitive(true)
+                    .build()
+                    .with_context(|| format!("invalid blocked_windows regex: {pattern:?}"))
             })
             .collect::<Result<_>>()?;
         Ok(())

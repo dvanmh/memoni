@@ -79,6 +79,17 @@ text_caret_command = "busctl --user call org.fcitx.Fcitx5 /cursorrect org.fcitx.
 # default: ["^[Ff]irefox"]
 middle_click_delay_windows = ["^[Ff]irefox"]
 
+# Apps whose selection content will never be recorded in the history
+#
+# Useful for password managers that don't set the x-kde-passwordManagerHint selection target
+# on the data they put on the clipboard.
+#
+# Each string is a case-insensitive regex matched against the instance/class names of the
+# selection owner window.
+#
+# default: []
+blocked_windows = ["(Not)?VerySecurePasswordManager"]
+
 # Command to run when the IME switch keymap is pressed
 #
 # Since memoni grabs all keyboard input while shown, the normal IME hotkey cannot be
