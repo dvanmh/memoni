@@ -22,7 +22,7 @@ Requirements:
 - Linux/X11 with OpenGL/EGL
 - fontconfig (only if using custom fonts)
 
-```
+```sh
 cargo build --release
 ```
 
@@ -30,23 +30,23 @@ cargo build --release
 
 - Start a server (default CLIPBOARD):
 
-  ```
+  ```sh
   memoni server
   ```
 
 - Start a PRIMARY server:
 
-  ```
+  ```sh
   memoni server --selection PRIMARY
   ```
 
 - Show the window:
 
-  ```
+  ```sh
   memoni
   ```
 
-  ```
+  ```sh
   memoni --selection PRIMARY
   ```
 
