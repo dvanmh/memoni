@@ -30,6 +30,15 @@ scroll_off = 100
 # default: true
 show_quick_paste_hint = true
 
+# How long recording stays paused after `memoni pause` is run without a duration provided
+#
+# The value uses the same format as the CLI duration: <n>s, <n>m, <n>h or their
+# combination (e.g., "1h30m"); a bare number is seconds (e.g., "90" is 90 seconds).
+# Set it to "inf" to stay paused until `memoni pause resume` is run.
+#
+# default: "inf"
+pause_auto_resume_after = "30m"
+
 # Window positioning mode
 #
 # List of window positioning strategies tried in sequence. Each strategy is used if it

@@ -137,6 +137,8 @@ pub struct Selection<'a> {
     transfer_windows: TransferWindowPool<'a>,
     mime_atoms: RefCell<HashMap<String, Atom>>,
     prev_item_metadata: Option<(u32, Instant, bool)>,
+    paused: bool,
+    paused_until: Option<Instant>,
 }
 
 impl<'a> Selection<'a> {
@@ -176,6 +178,8 @@ impl<'a> Selection<'a> {
             transfer_windows: TransferWindowPool::new(conn, root, selection_type)?,
             mime_atoms: RefCell::new(HashMap::new()),
             prev_item_metadata: None,
+            paused: false,
+            paused_until: None,
         })
     }
 
@@ -209,6 +213,14 @@ impl<'a> Selection<'a> {
                             }
 
                             info!("selection notification received from owner {}", ev.owner);
+
+                            if self.pause_state().0 {
+                                info!(
+                                    "recording paused, dropping selection from owner {}",
+                                    ev.owner
+                                );
+                                break 'blk;
+                            }
 
                             if is_owner_blocked(
                                 &self.window.conn,
@@ -695,6 +707,29 @@ impl<'a> Selection<'a> {
                 atom: transfer_atom,
             });
         }
+    }
+
+    pub fn pause(&mut self, until: Option<Instant>) {
+        self.paused = true;
+        self.paused_until = until;
+    }
+
+    pub fn unpause(&mut self) -> bool {
+        let prev_paused = self.paused;
+        self.paused = false;
+        self.paused_until = None;
+        prev_paused
+    }
+
+    pub fn pause_state(&mut self) -> (bool, Option<Instant>) {
+        if let Some(paused_until) = self.paused_until
+            && Instant::now() >= paused_until
+        {
+            info!("pause auto-resume deadline reached, resuming recording");
+            self.unpause();
+        }
+
+        (self.paused, self.paused_until)
     }
 }
 

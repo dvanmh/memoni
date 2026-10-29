@@ -3,7 +3,7 @@ use egui::Modifiers;
 use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
 use memoni::atspi_caret_tracker::{self, AtspiCaretTracker, CaretTrackerEvent};
-use memoni::config::{Config, WindowPositionMode};
+use memoni::config::{Config, PauseDuration, WindowPositionMode};
 use memoni::item_list::ItemList;
 use memoni::keymap_action::KeymapAction;
 use memoni::keymap_spec::{KeyAction, PasteModifier, PointerAction, SimpleScrollAction};
@@ -21,7 +21,6 @@ use memoni::{opengl_context::OpenGLContext, selection::SelectionType};
 use mio::{Waker, unix::SourceFd};
 use signal_hook::consts::TERM_SIGNALS;
 use signal_hook_mio::v1_0::Signals;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::{
     ffi::OsStr,
     fs,
@@ -30,7 +29,12 @@ use std::{
     path::Path,
     process::Stdio,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
+};
+use std::{
+    os::unix::net::{UnixListener, UnixStream},
+    process,
+    str::FromStr,
 };
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
@@ -50,9 +54,18 @@ enum Args {
     Server(ServerArgs),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ClientCommand {
+    ShowWin,
+    Pause(Option<PauseDuration>),
+    Resume,
+    PauseState,
+}
+
 #[derive(Debug)]
 struct ClientArgs {
     selection: SelectionType,
+    command: ClientCommand,
 }
 
 #[derive(Debug)]
@@ -128,6 +141,7 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
     let mut log_level = LevelFilter::Warn;
     let mut shows_help = false;
     let mut shows_version = false;
+    let mut command = ClientCommand::ShowWin;
     while let Some(arg) = parser.next()? {
         match arg {
             Short('s') | Long("selection") => {
@@ -152,6 +166,37 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
             Short('h') | Long("help") => {
                 shows_help = true;
             }
+            Value(ref subcommand) if !is_server_mode => {
+                let subcommand = subcommand.to_string_lossy();
+                command = match subcommand.as_ref() {
+                    "pause" => {
+                        let arg = match parser.value() {
+                            Ok(value) => Some(value.to_string_lossy().into_owned()),
+                            Err(lexopt::Error::MissingValue { .. }) => None,
+                            Err(err) => return Err(err.into()),
+                        };
+                        match arg.as_deref() {
+                            None => ClientCommand::Pause(None),
+                            Some("resume") => ClientCommand::Resume,
+                            Some("state") => ClientCommand::PauseState,
+                            Some(raw) => {
+                                let duration = match PauseDuration::from_str(raw) {
+                                    Ok(d) => d,
+                                    Err(err) => {
+                                        return Err((lexopt::Error::ParsingFailed {
+                                            value: raw.to_string(),
+                                            error: Box::new(err),
+                                        })
+                                        .into());
+                                    }
+                                };
+                                ClientCommand::Pause(Some(duration))
+                            }
+                        }
+                    }
+                    _ => return Err(arg.unexpected().into()),
+                };
+            }
             _ => return Err(arg.unexpected().into()),
         }
     }
@@ -173,11 +218,31 @@ OPTIONS:
         } else {
             println!(
                         "\
-Show memoni window if memoni server is running.
+Control the memoni server if it is running.
 To run in server mode, use: memoni server [OPTIONS]
 
 USAGE:
-  memoni [OPTIONS]
+  memoni [OPTIONS] [COMMAND]
+
+COMMANDS:
+  pause [DURATION|resume|state]
+     (default)
+        Stops recording new clipboard items. Auto-resume follows pause_auto_resume_after config
+
+     DURATION
+        Stops recording new clipboard items and auto-resumes after DURATION.
+
+        DURATION format:
+           <n>s, <n>m, <n>h or their combination (e.g., '1h30m');
+           a bare number is seconds (e.g., '90' is 90 seconds);
+           'inf' to stay paused until `memoni pause resume` is run.
+        e.g., `pause 30m`, `pause 1h30m`, `pause 90`, `pause inf`
+
+     resume
+        Resumes recording new clipboard items
+
+     state
+        Prints the current pause state
 
 OPTIONS:
   -s, --selection TYPE    Sets selection type [possible values: CLIPBOARD, PRIMARY] [default: CLIPBOARD]
@@ -202,6 +267,7 @@ OPTIONS:
         } else {
             Args::Client(ClientArgs {
                 selection: selection_type,
+                command,
             })
         },
         log_level,
@@ -220,11 +286,32 @@ fn client(args: ClientArgs, socket_path: &Path, display_id: Option<String>) -> R
         std::process::exit(1);
     }
 
+    let command = match &args.command {
+        ClientCommand::ShowWin => "show_win".to_string(),
+        ClientCommand::Pause(duration) => match duration {
+            Some(d) => format!("pause_{d}"),
+            None => "pause_".to_string(),
+        },
+        ClientCommand::Resume => "pause_resume".to_string(),
+        ClientCommand::PauseState => "pause_state".to_string(),
+    };
+
     debug!("connecting to socket: {socket_path:?}");
     let mut stream = UnixStream::connect(socket_path)?;
 
-    info!("sending 'show_win' to server");
-    stream.write_all(b"show_win")?;
+    info!("sending '{command}' to server");
+    stream.write_all(command.as_bytes())?;
+
+    let mut reply = String::new();
+    if let Ok(n) = stream.read_to_string(&mut reply)
+        && n > 0
+    {
+        if let Some(err) = reply.strip_prefix("err:") {
+            eprintln!("Error: {err}");
+            process::exit(1);
+        }
+        println!("{}", reply.strip_prefix("ok:").unwrap_or(&reply));
+    }
 
     Ok(())
 }
@@ -344,9 +431,10 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                         }
                     }
                     MEMONI_TOKEN => {
-                        info!("accepting client connection");
+                        debug!("accepting client connection");
                         let (mut stream, _) = sources.socket_listener.accept()?;
 
+                        let mut reply = None;
                         let mut buf = [0u8; 1024];
                         match stream.read(&mut buf) {
                             Ok(0) => {
@@ -356,17 +444,79 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                 let command = String::from_utf8_lossy(&buf[..n]);
                                 match command.as_ref() {
                                     "show_win" => {
-                                        info!("received client command: {command}, showing window");
+                                        info!(
+                                            "received client command '{command}', showing window"
+                                        );
                                         will_show_window = true;
+                                    }
+                                    cmd if let Some(cmd) = cmd.strip_prefix("pause_") => {
+                                        match cmd {
+                                            "state" => {
+                                                debug!("received client command '{command}'");
+                                                reply = Some(format!(
+                                                    "ok:{}",
+                                                    format_pause_state(selection.pause_state())
+                                                ));
+                                            }
+                                            "resume" => {
+                                                if !selection.unpause() {
+                                                    debug!(
+                                                        "received client command '{command}' while still recording"
+                                                    );
+                                                    reply = Some("err:not paused".to_string());
+                                                } else {
+                                                    info!(
+                                                        "received client command '{command}', resuming recording"
+                                                    );
+                                                }
+                                            }
+                                            duration => 'blk: {
+                                                let pause_duration = if duration.is_empty() {
+                                                    config.pause_auto_resume_after
+                                                } else {
+                                                    match PauseDuration::from_str(duration) {
+                                                        Ok(pd) => pd,
+                                                        Err(err) => {
+                                                            warn!(
+                                                                "invalid pause command '{command}': {err}"
+                                                            );
+                                                            reply = Some(format!("err:{err}"));
+                                                            break 'blk;
+                                                        }
+                                                    }
+                                                };
+                                                info!(
+                                                    "received client command '{command}', pausing recording for '{pause_duration}'"
+                                                );
+
+                                                selection.pause(
+                                                    pause_duration
+                                                        .duration()
+                                                        .map(|d| Instant::now() + d),
+                                                );
+                                                reply = Some(format!(
+                                                    "ok:{}",
+                                                    format_pause_state(selection.pause_state())
+                                                ));
+                                            }
+                                        }
                                     }
                                     _ => {
                                         warn!("unknown client command: {command}");
+                                        reply = Some("err:unknown client command".to_string());
                                     }
                                 }
                             }
                             Err(e) => {
                                 warn!("failed to read client command: {e:?}");
                             }
+                        }
+
+                        if let Some(reply) = reply {
+                            debug!("replying to client with: {reply:?}");
+                            stream.write_all(reply.as_bytes())?;
+                            stream.flush()?;
+                            stream.shutdown(std::net::Shutdown::Both)?;
                         }
                     }
                     KEYBOARD_GRAB_RETRY_TOKEN => {
@@ -1184,4 +1334,21 @@ fn query_text_caret(command: &str) -> Option<(i32, i32, i32)> {
     }
 
     Some((x, y, h))
+}
+
+fn format_pause_state((paused, paused_until): (bool, Option<Instant>)) -> String {
+    if !paused {
+        "not paused".to_string()
+    } else {
+        match paused_until {
+            Some(until) => {
+                let remaining = until.saturating_duration_since(Instant::now());
+                format!(
+                    "paused (auto-resume in {})",
+                    PauseDuration::Finite(remaining)
+                )
+            }
+            None => "paused (no auto-resume)".to_string(),
+        }
+    }
 }

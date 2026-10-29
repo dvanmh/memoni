@@ -50,6 +50,31 @@ cargo build --release
   memoni --selection PRIMARY
   ```
 
+- Pause capture:
+
+  ```sh
+  memoni pause        # follows `pause_auto_resume_after` config (default: paused forever)
+  memoni pause 30m    # auto-resume in 30 minutes
+  memoni pause inf    # never auto-resume (until `memoni pause resume`)
+  ```
+
+- Resume capture:
+
+  ```sh
+  memoni pause resume
+  ```
+
+- Check the pause state:
+
+  ```console
+  $ memoni pause state
+  not paused
+  $ memoni pause 30m
+  paused (auto-resume in 30m)
+  $ memoni pause state
+  paused (auto-resume in 29m50s)
+  ```
+
 ## Configuration
 
 Customize the behavior and appearance via the configuration file at `$XDG_CONFIG_HOME/memoni/config.toml`. Note that the application does not automatically create this file; you will need to create it manually.

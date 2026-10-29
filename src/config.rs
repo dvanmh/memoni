@@ -13,6 +13,7 @@ use std::fs;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::str::FromStr;
+use std::time::Duration;
 use xkeysym::Keysym;
 
 use crate::{
@@ -45,6 +46,7 @@ pub struct Config {
     pub drag_scroll: bool,
     pub scroll_off: f32,
     pub show_quick_paste_hint: bool,
+    pub pause_auto_resume_after: PauseDuration,
     #[serde_as(as = "OneOrMany<_>")]
     pub window_position_mode: Vec<WindowPositionMode>,
 
@@ -82,6 +84,7 @@ impl Default for Config {
             drag_scroll: false,
             scroll_off: 0.0,
             show_quick_paste_hint: true,
+            pause_auto_resume_after: PauseDuration::Infinite,
             window_position_mode: vec![],
             text_caret_command: None,
             app_paste_keymaps: Default::default(),
@@ -513,6 +516,110 @@ pub struct SearchModeColor {
     pub fuzzy: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub regex: Color,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseDuration {
+    Infinite,
+    Finite(Duration),
+}
+
+impl PauseDuration {
+    pub fn duration(self) -> Option<Duration> {
+        match self {
+            Self::Infinite => None,
+            Self::Finite(d) => Some(d),
+        }
+    }
+}
+
+impl FromStr for PauseDuration {
+    type Err = ParsePauseDurationError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "inf" {
+            return Ok(Self::Infinite);
+        }
+
+        let mut total = Duration::ZERO;
+        let mut rest = value;
+        while !rest.is_empty() {
+            let digits_len = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
+            let (digits, tail) = rest.split_at(digits_len);
+            if digits.is_empty() {
+                return Err(ParsePauseDurationError);
+            }
+
+            let count: u64 = digits.parse().map_err(|_| ParsePauseDurationError)?;
+            if digits.len() == value.len() {
+                total += Duration::from_secs(count);
+                break;
+            }
+
+            let Some(unit) = tail.chars().next() else {
+                return Err(ParsePauseDurationError);
+            };
+            let unit_secs: u64 = match unit {
+                's' => 1,
+                'm' => 60,
+                'h' => 3600,
+                _ => return Err(ParsePauseDurationError),
+            };
+            total += Duration::from_secs(count * unit_secs);
+            rest = &tail[1..];
+        }
+
+        Ok(Self::Finite(total))
+    }
+}
+
+impl Display for PauseDuration {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Infinite => write!(f, "inf"),
+            Self::Finite(d) => {
+                let secs = d.as_secs() + (d.subsec_nanos() > 0) as u64;
+                let h = secs / 3600;
+                let m = (secs % 3600) / 60;
+                let s = secs % 60;
+
+                if h > 0 {
+                    write!(f, "{h}h")?;
+                }
+                if m > 0 {
+                    write!(f, "{m}m")?;
+                }
+                if s > 0 || secs == 0 {
+                    write!(f, "{s}s")?;
+                }
+
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PauseDuration {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(d)?;
+        Self::from_str(&value).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ParsePauseDurationError;
+
+impl std::error::Error for ParsePauseDurationError {}
+
+impl Display for ParsePauseDurationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "expected duration like \"30m\", \"1h30m\", \"90\" or \"inf\"",
+        )
+    }
 }
 
 struct NonEmptyUnique<S>(PhantomData<S>);
