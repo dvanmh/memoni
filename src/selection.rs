@@ -125,6 +125,13 @@ impl<S, M> Task<S, M> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pause {
+    NotPaused,
+    Until(Option<Instant>),
+    AfterItems(u32),
+}
+
 pub struct Selection<'a> {
     pub history: ItemList,
 
@@ -137,8 +144,7 @@ pub struct Selection<'a> {
     transfer_windows: TransferWindowPool<'a>,
     mime_atoms: RefCell<HashMap<String, Atom>>,
     prev_item_metadata: Option<(u32, Instant, bool)>,
-    paused: bool,
-    paused_until: Option<Instant>,
+    pause: Pause,
 }
 
 impl<'a> Selection<'a> {
@@ -178,8 +184,7 @@ impl<'a> Selection<'a> {
             transfer_windows: TransferWindowPool::new(conn, root, selection_type)?,
             mime_atoms: RefCell::new(HashMap::new()),
             prev_item_metadata: None,
-            paused: false,
-            paused_until: None,
+            pause: Pause::NotPaused,
         })
     }
 
@@ -214,12 +219,30 @@ impl<'a> Selection<'a> {
 
                             info!("selection notification received from owner {}", ev.owner);
 
-                            if self.pause_state().0 {
-                                info!(
-                                    "recording paused, dropping selection from owner {}",
-                                    ev.owner
-                                );
-                                break 'blk;
+                            match self.pause_state() {
+                                Pause::NotPaused => {}
+                                Pause::AfterItems(remaining) => {
+                                    let remaining = remaining - 1;
+                                    info!(
+                                        "recording paused, dropping selection from owner {}, \
+                                         resuming after {remaining} more",
+                                        ev.owner
+                                    );
+                                    if remaining > 0 {
+                                        self.pause = Pause::AfterItems(remaining);
+                                    } else {
+                                        info!("pause item-count reached, resuming recording");
+                                        self.pause = Pause::NotPaused;
+                                    }
+                                    break 'blk;
+                                }
+                                Pause::Until(_) => {
+                                    info!(
+                                        "recording paused, dropping selection from owner {}",
+                                        ev.owner
+                                    );
+                                    break 'blk;
+                                }
                             }
 
                             if is_owner_blocked(
@@ -709,27 +732,25 @@ impl<'a> Selection<'a> {
         }
     }
 
-    pub fn pause(&mut self, until: Option<Instant>) {
-        self.paused = true;
-        self.paused_until = until;
+    pub fn pause(&mut self, pause: Pause) {
+        self.pause = pause;
     }
 
     pub fn unpause(&mut self) -> bool {
-        let prev_paused = self.paused;
-        self.paused = false;
-        self.paused_until = None;
-        prev_paused
+        let was_paused = self.pause != Pause::NotPaused;
+        self.pause = Pause::NotPaused;
+        was_paused
     }
 
-    pub fn pause_state(&mut self) -> (bool, Option<Instant>) {
-        if let Some(paused_until) = self.paused_until
-            && Instant::now() >= paused_until
+    pub fn pause_state(&mut self) -> Pause {
+        if let Pause::Until(Some(until)) = self.pause
+            && Instant::now() >= until
         {
             info!("pause auto-resume deadline reached, resuming recording");
             self.unpause();
         }
 
-        (self.paused, self.paused_until)
+        self.pause
     }
 }
 

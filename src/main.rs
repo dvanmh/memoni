@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow, bail};
 use egui::Modifiers;
 use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
-use memoni::atspi_caret_tracker::{self, AtspiCaretTracker, CaretTrackerEvent};
 use memoni::config::{Config, PauseDuration, WindowPositionMode};
 use memoni::item_list::ItemList;
 use memoni::keymap_action::KeymapAction;
@@ -16,6 +15,10 @@ use memoni::ui::{Ui, UiFlow};
 use memoni::x11_key_converter::X11KeyConverter;
 use memoni::x11_window::X11Window;
 use memoni::{AppMode, ordered_hash_map::OrderedHashMapView};
+use memoni::{
+    atspi_caret_tracker::{self, AtspiCaretTracker, CaretTrackerEvent},
+    selection::Pause,
+};
 use memoni::{input::Input, utils::x11_cursor_name};
 use memoni::{opengl_context::OpenGLContext, selection::SelectionType};
 use mio::{Waker, unix::SourceFd};
@@ -58,9 +61,15 @@ enum Args {
 enum ClientCommand {
     ShowWin,
     HideWin,
-    Pause(Option<PauseDuration>),
+    Pause(PauseCmd),
     Resume,
     PauseState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PauseCmd {
+    For(Option<PauseDuration>),
+    Next(u32),
 }
 
 #[derive(Debug)]
@@ -150,13 +159,13 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
                 selection_type = match selection_str.as_str() {
                     "PRIMARY" => SelectionType::PRIMARY,
                     "CLIPBOARD" => SelectionType::CLIPBOARD,
-                    _ => bail!("invalid selection type \"{selection_str}\""),
+                    _ => bail!("invalid selection type {selection_str:?}"),
                 };
             }
             Short('l') | Long("log-level") => {
                 log_level = parser.value()?.parse().map_err(|err| match err {
                     lexopt::Error::ParsingFailed { value, .. } => {
-                        anyhow!("invalid log level \"{value}\"")
+                        anyhow!("invalid log level {value:?}")
                     }
                     _ => err.into(),
                 })?;
@@ -179,9 +188,25 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
                             Err(err) => return Err(err.into()),
                         };
                         match arg.as_deref() {
-                            None => ClientCommand::Pause(None),
+                            None => ClientCommand::Pause(PauseCmd::For(None)),
                             Some("resume") => ClientCommand::Resume,
                             Some("state") => ClientCommand::PauseState,
+                            Some("next") => {
+                                let arg = match parser.value() {
+                                    Ok(value) => Some(value.to_string_lossy().into_owned()),
+                                    Err(lexopt::Error::MissingValue { .. }) => None,
+                                    Err(err) => return Err(err.into()),
+                                };
+                                let count = match arg.as_deref() {
+                                    None => 1,
+                                    Some(raw) => match raw.parse() {
+                                        Ok(0) => bail!("pause next count must be at least 1"),
+                                        Ok(count) => count,
+                                        Err(_) => bail!("invalid pause next count: {raw:?}"),
+                                    },
+                                };
+                                ClientCommand::Pause(PauseCmd::Next(count))
+                            }
                             Some(raw) => {
                                 let duration = match PauseDuration::from_str(raw) {
                                     Ok(d) => d,
@@ -193,7 +218,7 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
                                         .into());
                                     }
                                 };
-                                ClientCommand::Pause(Some(duration))
+                                ClientCommand::Pause(PauseCmd::For(Some(duration)))
                             }
                         }
                     }
@@ -236,7 +261,9 @@ COMMANDS:
   hide
      Hides memoni window
 
-  pause [DURATION|resume|state]
+  pause [DURATION|next [N]|inf|resume|state]
+     Pauses recording new clipboard items. Each pause command replaces the current pause condition.
+
      (default)
         Stops recording new clipboard items. Auto-resume follows pause_auto_resume_after config
 
@@ -245,9 +272,17 @@ COMMANDS:
 
         DURATION format:
            <n>s, <n>m, <n>h or their combination (e.g., '1h30m');
-           a bare number is seconds (e.g., '90' is 90 seconds);
-           'inf' to stay paused until `memoni pause resume` is run.
-        e.g., `pause 30m`, `pause 1h30m`, `pause 90`, `pause inf`
+           a bare number is seconds (e.g., '90' is 90 seconds)
+        e.g., `pause 30m`, `pause 1h30m`, `pause 90`
+
+     next [N]
+        Stops recording new clipboard items for the next N clipboard changes received.
+        This count is independent of whether the item would be recorded (e.g., copies
+        from blocked apps still count). Default for N is 1.
+        e.g., `pause next`, `pause next 3`
+
+     inf
+        Stops recording new clipboard items until `memoni pause resume` is run
 
      resume
         Resumes recording new clipboard items
@@ -300,9 +335,10 @@ fn client(args: ClientArgs, socket_path: &Path, display_id: Option<String>) -> R
     let command = match &args.command {
         ClientCommand::ShowWin => "show_win".to_string(),
         ClientCommand::HideWin => "hide_win".to_string(),
-        ClientCommand::Pause(duration) => match duration {
-            Some(d) => format!("pause_{d}"),
-            None => "pause_".to_string(),
+        ClientCommand::Pause(pause_cmd) => match pause_cmd {
+            PauseCmd::For(Some(d)) => format!("pause_for_{d}"),
+            PauseCmd::For(None) => "pause_for_".to_string(),
+            PauseCmd::Next(n) => format!("pause_next_{n}"),
         },
         ClientCommand::Resume => "pause_resume".to_string(),
         ClientCommand::PauseState => "pause_state".to_string(),
@@ -486,7 +522,25 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                                     );
                                                 }
                                             }
-                                            duration => 'blk: {
+                                            next_cmd
+                                                if let Some(count) = next_cmd
+                                                    .strip_prefix("next_")
+                                                    .and_then(|count| count.parse().ok()) =>
+                                            {
+                                                info!(
+                                                    "received client command '{command}', pausing recording for the next {count} items"
+                                                );
+
+                                                selection.pause(Pause::AfterItems(count));
+                                                reply = Some(format!(
+                                                    "ok:{}",
+                                                    format_pause_state(selection.pause_state())
+                                                ));
+                                            }
+                                            for_cmd
+                                                if let Some(duration) =
+                                                    for_cmd.strip_prefix("for_") =>
+                                            'blk: {
                                                 let pause_duration = if duration.is_empty() {
                                                     config.pause_auto_resume_after
                                                 } else {
@@ -505,15 +559,20 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                                     "received client command '{command}', pausing recording for '{pause_duration}'"
                                                 );
 
-                                                selection.pause(
+                                                selection.pause(Pause::Until(
                                                     pause_duration
                                                         .duration()
                                                         .map(|d| Instant::now() + d),
-                                                );
+                                                ));
                                                 reply = Some(format!(
                                                     "ok:{}",
                                                     format_pause_state(selection.pause_state())
                                                 ));
+                                            }
+                                            _ => {
+                                                warn!("invalid pause command '{command}'");
+                                                reply =
+                                                    Some("err:invalid pause command".to_string());
                                             }
                                         }
                                     }
@@ -1352,11 +1411,14 @@ fn query_text_caret(command: &str) -> Option<(i32, i32, i32)> {
     Some((x, y, h))
 }
 
-fn format_pause_state((paused, paused_until): (bool, Option<Instant>)) -> String {
-    if !paused {
-        "not paused".to_string()
-    } else {
-        match paused_until {
+fn format_pause_state(pause: Pause) -> String {
+    match pause {
+        Pause::NotPaused => "not paused".to_string(),
+        Pause::AfterItems(remaining) => format!(
+            "paused (resumes after {remaining} more {})",
+            if remaining == 1 { "item" } else { "items" }
+        ),
+        Pause::Until(until) => match until {
             Some(until) => {
                 let remaining = until.saturating_duration_since(Instant::now());
                 format!(
@@ -1365,6 +1427,6 @@ fn format_pause_state((paused, paused_until): (bool, Option<Instant>)) -> String
                 )
             }
             None => "paused (no auto-resume)".to_string(),
-        }
+        },
     }
 }

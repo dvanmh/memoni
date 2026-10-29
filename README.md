@@ -53,9 +53,11 @@ cargo build --release
 - Pause capture:
 
   ```sh
-  memoni pause        # follows `pause_auto_resume_after` config (default: paused forever)
-  memoni pause 30m    # auto-resume in 30 minutes
-  memoni pause inf    # never auto-resume (until `memoni pause resume`)
+  memoni pause           # follows `pause_auto_resume_after` config (default: paused forever)
+  memoni pause 30m       # auto-resume in 30 minutes
+  memoni pause inf       # never auto-resume (until `memoni pause resume`)
+  memoni pause next      # resumes after the next 1 clipboard change
+  memoni pause next 3    # resumes after the next 3 clipboard changes
   ```
 
 - Resume capture:
