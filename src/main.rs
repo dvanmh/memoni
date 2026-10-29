@@ -57,6 +57,7 @@ enum Args {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ClientCommand {
     ShowWin,
+    HideWin,
     Pause(Option<PauseDuration>),
     Resume,
     PauseState,
@@ -170,6 +171,7 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
                 let subcommand = subcommand.to_string_lossy();
                 command = match subcommand.as_ref() {
                     "show" => ClientCommand::ShowWin,
+                    "hide" => ClientCommand::HideWin,
                     "pause" => {
                         let arg = match parser.value() {
                             Ok(value) => Some(value.to_string_lossy().into_owned()),
@@ -230,6 +232,9 @@ USAGE:
 COMMANDS:
   show
      Shows memoni window
+
+  hide
+     Hides memoni window
 
   pause [DURATION|resume|state]
      (default)
@@ -294,6 +299,7 @@ fn client(args: ClientArgs, socket_path: &Path, display_id: Option<String>) -> R
 
     let command = match &args.command {
         ClientCommand::ShowWin => "show_win".to_string(),
+        ClientCommand::HideWin => "hide_win".to_string(),
         ClientCommand::Pause(duration) => match duration {
             Some(d) => format!("pause_{d}"),
             None => "pause_".to_string(),
@@ -454,6 +460,10 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                             "received client command '{command}', showing window"
                                         );
                                         will_show_window = true;
+                                    }
+                                    "hide_win" => {
+                                        info!("received client command '{command}', hiding window");
+                                        will_hide_window = true;
                                     }
                                     cmd if let Some(cmd) = cmd.strip_prefix("pause_") => {
                                         match cmd {
