@@ -169,6 +169,7 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
             Value(ref subcommand) if !is_server_mode => {
                 let subcommand = subcommand.to_string_lossy();
                 command = match subcommand.as_ref() {
+                    "show" => ClientCommand::ShowWin,
                     "pause" => {
                         let arg = match parser.value() {
                             Ok(value) => Some(value.to_string_lossy().into_owned()),
@@ -224,7 +225,12 @@ To run in server mode, use: memoni server [OPTIONS]
 USAGE:
   memoni [OPTIONS] [COMMAND]
 
+  If no command is given, `show` is used.
+
 COMMANDS:
+  show
+     Shows memoni window
+
   pause [DURATION|resume|state]
      (default)
         Stops recording new clipboard items. Auto-resume follows pause_auto_resume_after config
