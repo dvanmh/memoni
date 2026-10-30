@@ -202,7 +202,7 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
                                     Some(raw) => match raw.parse() {
                                         Ok(0) => bail!("pause next count must be at least 1"),
                                         Ok(count) => count,
-                                        Err(_) => bail!("invalid pause next count: {raw:?}"),
+                                        Err(_) => bail!("invalid pause next count {raw:?}"),
                                     },
                                 };
                                 ClientCommand::Pause(PauseCmd::Next(count))
@@ -210,13 +210,7 @@ fn parse_args() -> Result<(Args, LevelFilter)> {
                             Some(raw) => {
                                 let duration = match PauseDuration::from_str(raw) {
                                     Ok(d) => d,
-                                    Err(err) => {
-                                        return Err((lexopt::Error::ParsingFailed {
-                                            value: raw.to_string(),
-                                            error: Box::new(err),
-                                        })
-                                        .into());
-                                    }
+                                    Err(_) => bail!("invalid pause argument {raw:?}"),
                                 };
                                 ClientCommand::Pause(PauseCmd::For(Some(duration)))
                             }
