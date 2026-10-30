@@ -77,6 +77,13 @@ cargo build --release
   paused (auto-resume in 29m50s)
   ```
 
+For full command and option details, run:
+
+```sh
+memoni --help
+memoni server --help
+```
+
 ## Configuration
 
 Customize the behavior and appearance via the configuration file at `$XDG_CONFIG_HOME/memoni/config.toml`. Note that the application does not automatically create this file; you will need to create it manually.
