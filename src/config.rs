@@ -253,6 +253,10 @@ pub struct ThemeConfig {
     pub bookmark_ribbon: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub bookmark_color: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub pause_foreground: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub pause_background: Color,
 }
 
 impl Default for ThemeConfig {
@@ -285,6 +289,8 @@ impl Default for ThemeConfig {
             search_match: Color(0x60d48e4c),
             bookmark_ribbon: Color(0x55b6150b),
             bookmark_color: Color(0xffca190c),
+            pause_foreground: Color(0xffcccccc),
+            pause_background: Color(0xff78350f),
         }
     }
 }

@@ -33,6 +33,7 @@ use crate::{
     keymap_spec::{KeyChord, ScrollAction},
     ordered_hash_map::{OrderedHashMap, OrderedHashMapView},
     search::{SearchMatch, SearchMatchedBytes, SearchMode, SearchState},
+    selection::Pause,
     selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
     widgets::{
@@ -294,6 +295,7 @@ impl<'a> Ui<'a> {
         search_state: &SearchState,
         bookmark_view: bool,
         bookmarks: &OrderedHashMap<u64, SelectionItem>,
+        pause: Pause,
     ) -> Result<(FullOutput, Option<u64>)> {
         trace!("painting ui with flow {flow:?}");
 
@@ -375,6 +377,7 @@ impl<'a> Ui<'a> {
             }
 
             self.search_panel(ui, flow, mode == AppMode::Search, search_query, search_state);
+            self.pause_strip(ui, flow, pause);
 
             let scroll_output = egui::CentralPanel::default()
                 .frame(egui::Frame::new())
@@ -1307,6 +1310,44 @@ impl<'a> Ui<'a> {
                     quick paste hints to render correctly in first search panel expanded frame.",
             );
         }
+    }
+
+    fn pause_strip(&self, ui: &mut egui::Ui, flow: UiFlow, pause: Pause) {
+        let Some(description) = pause.describe(Instant::now()) else {
+            return;
+        };
+
+        let layout = &self.config.layout;
+        let theme = &self.config.theme;
+        let padding_x = layout.window_padding.x
+            + layout
+                .button_padding
+                .x
+                .clamp(i8::MIN as f32, i8::MAX as f32) as i8;
+        let padding_y = layout.window_padding.y;
+
+        let panel_id_salt = "pause_strip";
+        match flow {
+            UiFlow::TopToBottom => egui::Panel::bottom(panel_id_salt),
+            UiFlow::BottomToTop => egui::Panel::top(panel_id_salt),
+        }
+        .resizable(false)
+        .drag_to_open(false)
+        .show_separator_line(false)
+        .frame(
+            egui::Frame::new()
+                .fill(theme.pause_background.into())
+                .inner_margin(egui::Margin {
+                    left: padding_x,
+                    right: layout.window_padding.x,
+                    top: padding_y,
+                    bottom: padding_y,
+                }),
+        )
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.colored_label(theme.pause_foreground, format!("Paused ({description})"));
+        });
     }
 
     pub fn search_selected_text<'q>(&self, query: &'q str) -> Option<&'q str> {

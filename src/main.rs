@@ -794,6 +794,8 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     );
                 }
 
+                let pause = selection.pause_state();
+
                 let selection_items_view = match state.mode {
                     AppMode::Search => OrderedHashMapView::new(
                         &active_list(&selection, &bookmarks, state.bookmark_view)
@@ -838,6 +840,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     &search.state,
                     state.bookmark_view,
                     bookmarks.items(),
+                    pause,
                 )?;
 
                 handle_pointer_actions(
@@ -1412,21 +1415,8 @@ fn query_text_caret(command: &str) -> Option<(i32, i32, i32)> {
 }
 
 fn format_pause_state(pause: Pause) -> String {
-    match pause {
-        Pause::NotPaused => "not paused".to_string(),
-        Pause::AfterItems(remaining) => format!(
-            "paused (resumes after {remaining} more {})",
-            if remaining == 1 { "item" } else { "items" }
-        ),
-        Pause::Until(until) => match until {
-            Some(until) => {
-                let remaining = until.saturating_duration_since(Instant::now());
-                format!(
-                    "paused (auto-resume in {})",
-                    PauseDuration::Finite(remaining)
-                )
-            }
-            None => "paused (no auto-resume)".to_string(),
-        },
-    }
+    pause
+        .describe(Instant::now())
+        .map(|d| format!("paused ({d})"))
+        .unwrap_or_else(|| "not paused".to_string())
 }

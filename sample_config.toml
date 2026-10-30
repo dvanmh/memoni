@@ -453,6 +453,16 @@ bookmark_ribbon = "#7c15d6ab"
 # default: "#ca190c"
 bookmark_color = "#a44bf1"
 
+# Pause strip text color
+#
+# default: "#cccccc"
+pause_foreground = "#ffffff"
+
+# Pause strip background color
+#
+# default: "#78350f"
+pause_background = "#92400edd"
+
 
 # Selection-specific overrides
 # Any field can be overridden under [CLIPBOARD] or [PRIMARY]

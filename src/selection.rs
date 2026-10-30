@@ -28,7 +28,7 @@ use x11rb::{
 use regex::Regex;
 
 use crate::{
-    config::Config,
+    config::{Config, PauseDuration},
     item_list::ItemList,
     selection_item::{SelectionData, SelectionItem},
     transfer_window_pool::{TransferWindow, TransferWindowPool},
@@ -751,6 +751,23 @@ impl<'a> Selection<'a> {
         }
 
         self.pause
+    }
+}
+
+impl Pause {
+    pub fn describe(self, now: Instant) -> Option<String> {
+        match self {
+            Self::NotPaused => None,
+            Self::AfterItems(remaining) => Some(format!(
+                "resumes after {remaining} more {}",
+                if remaining == 1 { "item" } else { "items" }
+            )),
+            Self::Until(Some(until)) => Some(format!(
+                "auto-resumes in {}",
+                PauseDuration::Finite(until.saturating_duration_since(now))
+            )),
+            Self::Until(None) => Some("no auto-resume".to_string()),
+        }
     }
 }
 
