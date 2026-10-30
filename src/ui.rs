@@ -3,15 +3,16 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
 use crate::fonts::FontPlan;
 use anyhow::{Result, anyhow};
 use egui::{
-    Color32, ColorImage, CornerRadius, FontId, FullOutput, Id, IdSalt, LayerId, Mesh, Order, Pos2,
-    RawInput, Rect, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
+    Color32, ColorImage, CornerRadius, FontId, FullOutput, Galley, Id, IdSalt, LayerId, Mesh,
+    Order, Pos2, RawInput, Rect, Stroke, StrokeKind, TextBuffer, TextureHandle, TextureOptions,
+    Vec2,
     emath::GuiRounding as _,
     epaint::{self, ColorMode, PathStroke},
     scroll_area::{DragScroll, ScrollSource},
@@ -32,7 +33,7 @@ use crate::{
     freedesktop_cache::get_cached_thumbnail,
     keymap_spec::{KeyChord, ScrollAction},
     ordered_hash_map::{OrderedHashMap, OrderedHashMapView},
-    search::{SearchMatch, SearchMatchedBytes, SearchMode, SearchState},
+    search::{SearchMatch, SearchMatchedBytes, SearchState},
     selection::Pause,
     selection_item::{self, ActedOnUris, SelectionItem},
     utils::is_image_mime,
@@ -1270,15 +1271,27 @@ impl<'a> Ui<'a> {
 
                     ui.add_space(layout.button_padding.x);
 
+                    let mut layouter =
+                        |ui: &egui::Ui, s: &dyn TextBuffer, wrap_width: f32| -> Arc<Galley> {
+                            let color = if state.is_query_valid(s.as_str()) {
+                                ui.visuals().text_color()
+                            } else {
+                                theme.error_foreground.into()
+                            };
+
+                            ui.painter().layout(
+                                s.as_str().to_string(),
+                                egui::FontSelection::default().resolve(ui.style()),
+                                color,
+                                wrap_width,
+                            )
+                        };
+
                     egui::TextEdit::singleline(query)
                         .id(input_id)
                         .frame(egui::Frame::new())
                         .desired_width(f32::INFINITY)
-                        .text_color_opt(if state.mode == SearchMode::Regex && state.invalid_regex {
-                            Some(theme.error_foreground.into())
-                        } else {
-                            None
-                        })
+                        .layouter(&mut layouter)
                         .show(ui);
                 });
             });

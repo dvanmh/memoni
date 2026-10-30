@@ -55,7 +55,15 @@ pub struct Search {
 
 pub struct SearchState {
     pub mode: SearchMode,
-    pub invalid_regex: bool,
+}
+
+impl SearchState {
+    pub fn is_query_valid(&self, query: &str) -> bool {
+        match self.mode {
+            SearchMode::Plain | SearchMode::Fuzzy => true,
+            SearchMode::Regex => Regex::new(query).ok().is_some(),
+        }
+    }
 }
 
 impl Search {
@@ -66,7 +74,6 @@ impl Search {
             matches: vec![],
             state: SearchState {
                 mode: SearchMode::Plain,
-                invalid_regex: false,
             },
             prev_query: String::new(),
             prev_mode: SearchMode::Plain,
@@ -77,7 +84,6 @@ impl Search {
         self.query.clear();
         self.prev_query.clear();
         self.state.mode = SearchMode::Plain;
-        self.state.invalid_regex = false;
         self.visible_ids.clear();
         self.matches.clear();
     }
@@ -176,15 +182,11 @@ impl Search {
             }
             SearchMode::Regex => {
                 let query_regex = match Regex::new(&self.query) {
-                    Ok(re) => {
-                        self.state.invalid_regex = false;
-                        re
-                    }
+                    Ok(re) => re,
                     // Clear the matches on regex error but not the visible_ids, so that
                     // the view doesn't change while in the middle of typing a regex query
                     Err(err) => {
                         debug!("invalid search regex query {:?}: {err}", self.query);
-                        self.state.invalid_regex = true;
                         return;
                     }
                 };
