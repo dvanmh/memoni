@@ -267,7 +267,6 @@ impl<'a> Ui<'a> {
             style.animation_time = 0.15;
             style.spacing.scroll.kinetic = KineticScrollStyle {
                 decay_time: 0.4,
-                stop_distance: 2.0,
                 ..Default::default()
             };
         });
