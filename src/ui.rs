@@ -1392,6 +1392,7 @@ impl<'a> Ui<'a> {
             scroll_bar_hidden: self.config.scroll_bar_auto_hide,
             removed_item_rect: None,
         };
+        self.egui_ctx.stop_dragging();
         self.invalidate_text_caches();
     }
 
