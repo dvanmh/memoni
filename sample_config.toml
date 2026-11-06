@@ -148,7 +148,7 @@ Emacs = [
 
 # Window dimensions (px)
 #
-# default: { width = 400, height = 550 }
+# default: { width = 375, height = 550 }
 window_dimensions = { width = 300, height = 700 }
 
 # Window content padding (px)
