@@ -27,6 +27,7 @@ pub struct ClipboardButton {
     preview_background: Color32,
     with_preview_padding: Option<Vec2>,
     underline_offset: f32,
+    keyboard_hints: &'static [&'static str],
     keyboard_hint_foreground: Color32,
     search_match_background: Color32,
 
@@ -47,7 +48,6 @@ pub struct ClipboardButton {
     color_preview_background: Option<TextureHandle>,
 
     text_cache: ButtonTexts<PaintText>,
-    prev_render_text_width: f32,
 }
 
 impl ClipboardButton {
@@ -125,6 +125,12 @@ impl ClipboardButton {
     #[inline]
     pub fn underline_offset(mut self, underline_offset: f32) -> Self {
         self.underline_offset = underline_offset;
+        self
+    }
+
+    #[inline]
+    pub fn keyboard_hints(mut self, keyboard_hints: &'static [&'static str]) -> Self {
+        self.keyboard_hints = keyboard_hints;
         self
     }
 
@@ -269,6 +275,12 @@ impl ClipboardButton {
                     text_width -= self.color_preview_size + padding.x;
                 }
 
+                let keyboard_hint_width =
+                    keyboard_hint_width(ui, self.keyboard_hints, keyboard_hint_size);
+                if keyboard_hint_width > 0.0 {
+                    text_width -= keyboard_hint_width + keyboard_hint_gap;
+                }
+
                 let keyboard_hint_galley = keyboard_hint.map(|sh| {
                     WidgetText::RichText(Arc::new(
                         RichText::new(sh)
@@ -282,10 +294,6 @@ impl ClipboardButton {
                         TextStyle::Button,
                     )
                 });
-                text_width -= keyboard_hint_galley
-                    .as_ref()
-                    .map(|g| g.size().x + keyboard_hint_gap)
-                    .unwrap_or(0.0);
 
                 let label_height = display_text_height(ui, self.label_style());
                 let sublabel_height = if raw.is_some() {
@@ -327,11 +335,6 @@ impl ClipboardButton {
                     ui.allocate_exact_size(Vec2::new(desired_width, desired_height), Sense::HOVER);
 
                 if ui.is_rect_visible(rect) {
-                    if text_width != self.prev_render_text_width {
-                        self.invalidate_text_cache();
-                    }
-                    self.prev_render_text_width = text_width;
-
                     let visuals = &ui.style().visuals.widgets.inactive;
                     let bg_fill = if is_active {
                         ui.style().visuals.widgets.active.weak_bg_fill
@@ -616,6 +619,19 @@ impl ClipboardButton {
     pub fn invalidate_text_cache(&mut self) {
         self.text_cache = ButtonTexts::default();
     }
+}
+
+fn keyboard_hint_width(ui: &Ui, hints: &[&str], size: f32) -> f32 {
+    ui.fonts_mut(|fonts| {
+        hints
+            .iter()
+            .map(|hint| {
+                hint.chars()
+                    .map(|c| fonts.glyph_width(&FontId::proportional(size), c))
+                    .sum::<f32>()
+            })
+            .fold(0.0, f32::max)
+    })
 }
 
 fn build_paint_text(

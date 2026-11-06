@@ -1462,6 +1462,11 @@ impl<'a> Ui<'a> {
             .id(item.id())
             .underline_offset(config.font.underline_offset)
             .with_preview_padding(config.layout.button_with_preview_padding)
+            .keyboard_hints(if config.show_quick_paste_hint {
+                &HINTS
+            } else {
+                &[]
+            })
             .keyboard_hint_foreground(config.theme.secondary_foreground)
             .search_match_background(config.theme.search_match)
             .label_size(config.font.size)
