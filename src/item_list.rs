@@ -67,11 +67,14 @@ impl ItemList {
         self.items.is_empty()
     }
 
-    pub fn first_unpinned_id(&self) -> u64 {
+    pub fn first_unpinned(&self) -> Option<&SelectionItem> {
         self.items
             .get_by_index(self.pinned_count)
-            .map(|(id, _)| *id)
-            .unwrap_or(0)
+            .map(|(_, item)| item)
+    }
+
+    pub fn first_unpinned_id(&self) -> u64 {
+        self.first_unpinned().map(|item| item.id()).unwrap_or(0)
     }
 
     pub fn is_pinned(&self, item_id: u64) -> bool {
@@ -96,8 +99,10 @@ impl ItemList {
         }
     }
 
-    pub fn pop_front(&mut self) -> Option<SelectionItem> {
-        self.items.pop_front().map(|(_, item)| item)
+    pub fn pop_first_unpinned(&mut self) -> Option<SelectionItem> {
+        self.items
+            .remove_by_index(self.pinned_count)
+            .map(|(_, item)| item)
     }
 
     pub fn remove(&mut self, item_id: u64) -> Option<SelectionItem> {

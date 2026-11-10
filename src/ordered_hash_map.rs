@@ -85,6 +85,15 @@ where
         other
     }
 
+    pub fn remove_by_index(&mut self, index: usize) -> Option<(K, V)> {
+        if let Some(key) = self.keys.remove(index)
+            && let Some(value) = self.map.remove(&key)
+        {
+            return Some((key, value));
+        }
+        None
+    }
+
     pub fn get(&self, key: &K) -> Option<&V> {
         self.map.get(key)
     }

@@ -144,7 +144,7 @@ pub struct Selection<'a> {
     request_tasks: HashMap<Window, Task<RequestTaskState, (Atom, Owner)>>,
     transfer_windows: TransferWindowPool<'a>,
     mime_atoms: RefCell<HashMap<String, Atom>>,
-    prev_item_metadata: Option<(u32, Instant, bool)>,
+    prev_item_metadata: Option<(u64, u32, Instant, bool)>,
     pause: Pause,
     expiry_timer: &'a TimerfdSource,
     expiry_queue: Vec<(Instant, u64)>,
@@ -618,12 +618,12 @@ impl<'a> Selection<'a> {
             return Ok(EventHandlingResult::None);
         }
 
-        let prev_item = self.history.items().front();
-        let mut removed = Vec::new();
+        let latest_item = self.history.first_unpinned();
+        let mut merged_prev_item = None;
 
         // We only support merge plaintext items without any other type of data
         if self.merge_consecutive_similar_items
-            && let Some((prev_owner, prev_time, is_previously_seen)) = self.prev_item_metadata
+            && let Some((prev_item_id, prev_owner, prev_time, is_previously_seen)) = self.prev_item_metadata
             && prev_owner == owner
             && prev_time.elapsed() < Duration::from_secs(1)
             // ---
@@ -634,18 +634,28 @@ impl<'a> Selection<'a> {
             && let (mime, new_text) = data.iter().next().unwrap()
             && is_plaintext_mime(mime)
             // ---
-            && let Some((_, prev_item)) = prev_item
+            && let Some(latest_item) = latest_item
+            && latest_item.id() == prev_item_id
+            && let prev_item = latest_item
             && prev_item.data().len() == 1
             && let Some(prev_text) = prev_item.data().get(mime)
             // ---
             && (contains(new_text, prev_text) || contains(prev_text, new_text))
         {
-            debug!("merging selection with the previous one");
-            removed.push(self.history.pop_front().unwrap());
+            debug!(
+                "merging selection with the previous selection item {}",
+                prev_item.id()
+            );
+            merged_prev_item = self.history.pop_first_unpinned();
         }
 
-        let (new_item_id, new_item, removed) =
-            self.insert_data_item(mem::take(data), removed, owner)?;
+        let (new_item_id, new_item, mut removed) = self.insert_data_item(mem::take(data), owner)?;
+
+        if let Some(merged_prev_item) = merged_prev_item
+            && merged_prev_item.id() != new_item_id
+        {
+            removed.push(merged_prev_item);
+        }
 
         if new_item.is_some() {
             info!("selection transfer completed with new selection: {new_item_id}");
@@ -666,16 +676,16 @@ impl<'a> Selection<'a> {
             "text/plain;charset=utf-8".to_owned(),
             text.as_bytes().to_vec(),
         )]);
-        let (_, new_item, removed) = self.insert_data_item(data, Vec::new(), 0)?;
+        let (_, new_item, removed) = self.insert_data_item(data, 0)?;
         Ok((new_item, removed))
     }
 
     fn insert_data_item(
         &mut self,
         mut data: SelectionData,
-        mut removed: Vec<SelectionItem>,
         owner: Owner,
     ) -> Result<(u64, Option<&SelectionItem>, Vec<SelectionItem>)> {
+        let mut removed = vec![];
         let insert_item_id = hash_selection_data(&data)?;
 
         let plain_text = data.iter().find_map(|(mime, bytes)| {
@@ -750,7 +760,7 @@ impl<'a> Selection<'a> {
 
         let new_item = new_item.then(|| self.history.get(insert_item_id)).flatten();
 
-        self.prev_item_metadata = Some((owner, Instant::now(), is_previously_seen));
+        self.prev_item_metadata = Some((insert_item_id, owner, Instant::now(), is_previously_seen));
         Ok((insert_item_id, new_item, removed))
     }
 
