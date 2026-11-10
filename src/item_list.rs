@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use anyhow::{Result, bail};
 use bincode::{Decode, Encode};
 
@@ -6,7 +8,7 @@ use crate::{
     selection_item::{SelectionData, SelectionItem},
 };
 
-#[derive(Debug, Encode)]
+#[derive(Debug)]
 pub struct ItemList {
     items: OrderedHashMap<u64, SelectionItem>,
     pinned_count: usize,
@@ -35,6 +37,10 @@ impl ItemList {
 
     pub fn get(&self, item_id: u64) -> Option<&SelectionItem> {
         self.items.get(&item_id)
+    }
+
+    pub fn get_mut(&mut self, item_id: u64) -> Option<&mut SelectionItem> {
+        self.items.get_mut(&item_id)
     }
 
     pub fn contains(&self, item_id: u64) -> bool {
@@ -98,11 +104,16 @@ impl ItemList {
         self.items.remove(&item_id)
     }
 
-    pub fn insert_after_pinned(&mut self, item_id: u64, data: SelectionData) {
+    pub fn insert_after_pinned(
+        &mut self,
+        item_id: u64,
+        data: SelectionData,
+        expiry_deadline: Option<Instant>,
+    ) {
         self.items.insert(
             self.pinned_count,
             item_id,
-            SelectionItem::create(item_id, data),
+            SelectionItem::create(item_id, data, expiry_deadline),
         );
     }
 
@@ -121,6 +132,35 @@ impl ItemList {
             .split_off(limit)
             .into_iter()
             .map(|(_, item)| item)
+    }
+}
+
+impl Encode for ItemList {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        let persistable: Vec<(u64, &SelectionItem)> = self
+            .items
+            .iter()
+            .filter(|(_, item)| !item.is_ephemeral())
+            .map(|(&id, item)| (id, item))
+            .collect();
+
+        (persistable.len() as u64).encode(encoder)?;
+        for (id, item) in &persistable {
+            id.encode(encoder)?;
+            item.encode(encoder)?;
+        }
+
+        (persistable.len() as u64).encode(encoder)?;
+        for (id, _) in &persistable {
+            id.encode(encoder)?;
+        }
+
+        self.pinned_count.encode(encoder)?;
+
+        Ok(())
     }
 }
 

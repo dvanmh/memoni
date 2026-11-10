@@ -31,6 +31,7 @@ use crate::{
     config::{Config, PauseDuration},
     item_list::ItemList,
     selection_item::{SelectionData, SelectionItem},
+    timerfd_source::TimerfdSource,
     transfer_window_pool::{TransferWindow, TransferWindowPool},
     utils::{
         get_x11_window_class, image_mime_score, is_image_mime, is_plaintext_mime,
@@ -145,6 +146,8 @@ pub struct Selection<'a> {
     mime_atoms: RefCell<HashMap<String, Atom>>,
     prev_item_metadata: Option<(u32, Instant, bool)>,
     pause: Pause,
+    expiry_timer: &'a TimerfdSource,
+    expiry_queue: Vec<(Instant, u64)>,
 }
 
 impl<'a> Selection<'a> {
@@ -153,6 +156,7 @@ impl<'a> Selection<'a> {
         window: &'a X11Window,
         selection_type: SelectionType,
         config: &'a Config,
+        expiry_timer: &'a TimerfdSource,
         merge_consecutive_similar_items: bool,
     ) -> Result<Self> {
         let conn = &window.conn;
@@ -185,6 +189,8 @@ impl<'a> Selection<'a> {
             mime_atoms: RefCell::new(HashMap::new()),
             prev_item_metadata: None,
             pause: Pause::NotPaused,
+            expiry_timer,
+            expiry_queue: vec![],
         })
     }
 
@@ -641,7 +647,10 @@ impl<'a> Selection<'a> {
         let (new_item_id, new_item, removed) =
             self.insert_data_item(mem::take(data), removed, owner)?;
 
-        info!("selection transfer completed with new selection: {new_item_id}");
+        if new_item.is_some() {
+            info!("selection transfer completed with new selection: {new_item_id}");
+        }
+
         Ok(EventHandlingResult::HistoryUpdated {
             added: new_item.map(|item| item.id()),
             removed,
@@ -669,33 +678,75 @@ impl<'a> Selection<'a> {
     ) -> Result<(u64, Option<&SelectionItem>, Vec<SelectionItem>)> {
         let insert_item_id = hash_selection_data(&data)?;
 
+        let plain_text = data.iter().find_map(|(mime, bytes)| {
+            is_plaintext_mime(mime).then(|| String::from_utf8_lossy(bytes))
+        });
+
+        let ttl = plain_text.and_then(|text| {
+            self.config
+                .ignore_pattern_rules
+                .iter()
+                .find(|rule| rule.pattern.is_match(text.as_ref()))
+                .map(|rule| rule.ttl)
+        });
+        let is_zero_ttl = ttl == Some(Duration::ZERO);
+
         let mut is_previously_seen = false;
-        let mut new_item = None;
+        let mut new_item = false;
+        let mut inserting = false;
         if self.history.contains(insert_item_id) {
-            if self
-                .history
-                .get(insert_item_id)
-                .is_some_and(|i| i.is_pinned())
-            {
-                debug!("selection is duplicated, old one is pinned, keeping old selection");
+            if self.history.is_pinned(insert_item_id) {
+                info!(
+                    "inserting selection item {insert_item_id} is duplicate, the old item is pinned, keeping old item",
+                );
             } else {
-                debug!("selection is duplicated, removing old one");
+                info!(
+                    "inserting selection item {insert_item_id} is duplicate, removing the old item"
+                );
                 let previous_seen_item = self.history.remove(insert_item_id).unwrap();
-                self.history
-                    .insert_after_pinned(insert_item_id, previous_seen_item.data().clone());
+
+                if is_zero_ttl {
+                    info!(
+                        "duplicate selection item {insert_item_id} matches a zero-ttl ignore pattern, dropping it"
+                    );
+                    removed.push(previous_seen_item);
+                } else {
+                    inserting = true;
+                }
             }
 
             is_previously_seen = true;
         } else {
-            self.history
-                .insert_after_pinned(insert_item_id, mem::take(&mut data));
+            if is_zero_ttl {
+                info!(
+                    "selection item {insert_item_id} matches a zero-ttl ignore pattern, dropping it"
+                );
+            } else {
+                inserting = true;
 
-            if self.history.len() > self.config.item_limit {
-                removed.extend(self.history.split_off(self.config.item_limit));
-            };
+                if self.history.len() > self.config.item_limit {
+                    removed.extend(self.history.split_off(self.config.item_limit));
+                };
 
-            new_item = self.history.get(insert_item_id);
+                new_item = true;
+            }
         }
+
+        if inserting {
+            let expiry_deadline = ttl.map(|ttl| Instant::now() + ttl);
+            self.history
+                .insert_after_pinned(insert_item_id, mem::take(&mut data), expiry_deadline);
+
+            if let Some(ttl) = ttl {
+                if self.expiry_queue.is_empty() {
+                    self.expiry_timer.set_timer((ttl.as_millis() + 1) as u64)?;
+                }
+                self.expiry_queue
+                    .push((expiry_deadline.unwrap(), insert_item_id));
+            }
+        }
+
+        let new_item = new_item.then(|| self.history.get(insert_item_id)).flatten();
 
         self.prev_item_metadata = Some((owner, Instant::now(), is_previously_seen));
         Ok((insert_item_id, new_item, removed))
@@ -729,6 +780,36 @@ impl<'a> Selection<'a> {
                 id: transfer_window,
                 atom: transfer_atom,
             });
+        }
+    }
+
+    pub fn remove_expired(&mut self) -> Result<Vec<SelectionItem>> {
+        self.expiry_timer.clear_event()?;
+
+        let now = Instant::now();
+
+        let expired_count = self
+            .expiry_queue
+            .partition_point(|(deadline, _)| *deadline <= now);
+        let expired = self
+            .expiry_queue
+            .drain(..expired_count)
+            .filter_map(|(_, id)| self.history.remove(id))
+            .collect();
+
+        if let Some((next_deadline, _)) = self.expiry_queue.first() {
+            let remaining = next_deadline.saturating_duration_since(now);
+            self.expiry_timer
+                .set_timer((remaining.as_millis() + 1) as u64)?;
+        }
+
+        Ok(expired)
+    }
+
+    pub fn cancel_expiry(&mut self, id: u64) {
+        self.expiry_queue.retain(|(_, entry_id)| *entry_id != id);
+        if let Some(item) = self.history.get_mut(id) {
+            item.clear_expiry_deadline();
         }
     }
 

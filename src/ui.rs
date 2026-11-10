@@ -410,6 +410,8 @@ impl<'a> Ui<'a> {
                             return Ok(());
                         }
 
+                        let now = Instant::now();
+
                         let item_it: Box<dyn Iterator<Item = _>> = if flow == UiFlow::BottomToTop {
                             Box::new(selection_items.iter().enumerate().rev())
                         } else {
@@ -439,6 +441,9 @@ impl<'a> Ui<'a> {
                                 } else if let Some(raw) = raw_display(item, m) {
                                     state = state.raw(raw);
                                 }
+                            }
+                            if let Some(deadline) = item.expiry_deadline() {
+                                state = state.expiry_remaining(deadline.saturating_duration_since(now));
                             }
 
                             let btn = btn_widget.ui(ui, state);

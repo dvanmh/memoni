@@ -99,6 +99,53 @@ middle_click_delay_windows = ["^[Ff]irefox"]
 # default: []
 blocked_windows = ["(Not)?VerySecurePasswordManager"]
 
+# Clipboard content patterns that are scheduled for deletion after a period
+#
+# Each entry is an array-of-tables with two fields:
+#   pattern  - a case-sensitive regex matched against the item's plain text content
+#              (not raw HTML, not image data). The first matching pattern in the
+#              list wins.
+#   ttl      - how long the item stays in the history before being deleted.
+#              Format: <n>s, <n>m, <n>h or their combination (e.g., "1m30s");
+#              a bare number is seconds (e.g., "90" is 90 seconds).
+#              default: "0s"
+#
+# With ttl = "0s", matching items are never recorded at all.
+# With ttl > "0s", the item is recorded and shows a countdown on its button;
+# it is then deleted once the countdown reaches zero.
+#
+# If you want to persist a matching item:
+#   - Pin it -> deletion is cancelled; unpinning later does not bring the expiry back.
+#   - Bookmark it -> the bookmark view keeps its own copy; the history entry still expires.
+#
+# Setting this replaces the built-in defaults; copy any patterns from the "default"
+# list below that you want to keep using.
+#
+# WARNING: on startup, existing history items that match any new pattern (pinned items
+# are excluded) are deleted immediately. Existing bookmarks are not affected.
+#
+# default: [
+#     { pattern = '\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*' },
+#     { pattern = '-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----' },
+#     { pattern = 'AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}' },
+#     { pattern = '(?i)\bauthorization:\s*(?:bearer|basic|token)\s+\S{8,}' },
+#     { pattern = '(?i)\bbearer\s+[A-Za-z0-9._~+/-]{20,}=*' },
+#     { pattern = '\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b' },
+#     { pattern = 'AccountKey=[A-Za-z0-9+/=]{60,}' },
+#     { pattern = '\bdo[opr]_v1_[a-f0-9]{64}\b' },
+#     { pattern = '\bhv[sbr]\.[A-Za-z0-9_-]{24,}' },
+#     { pattern = '\bgh[pousr]_[A-Za-z0-9]{36,255}\b' },
+#     { pattern = '\bgithub_pat_[A-Za-z0-9_]{60,}' },
+#     { pattern = '\bglpat-[A-Za-z0-9_-]{20,}' },
+#     { pattern = '\bnpm_[A-Za-z0-9]{36}\b' },
+#     { pattern = '\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}' },
+#     { pattern = '\b(?:https?|ftps?|sftp|ssh|git\+https?|postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^/\s:@]+:[^/\s:@]+@\S+' },
+# ]
+ignore_patterns = [
+    { pattern = 'secret_key_[a-z]{10,}', ttl = "5s" },
+    { pattern = 'very_secret_key_[a-z]{20,}' },
+]
+
 # Command to run when the IME switch keymap is pressed
 #
 # Since memoni grabs all keyboard input while shown, the normal IME hotkey cannot be

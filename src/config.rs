@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use egui::Color32;
 use egui::ecolor::ParseHexColorError;
 use indexmap::IndexSet;
@@ -63,6 +63,10 @@ pub struct Config {
     #[serde(skip)]
     pub blocked_window_patterns: Vec<Regex>,
 
+    pub ignore_patterns: Vec<IgnorePatternConfig>,
+    #[serde(skip)]
+    pub ignore_pattern_rules: Vec<IgnorePatternRule>,
+
     pub switch_ime_command: Option<String>,
     pub ime_unicode_input_command: Option<String>,
     pub ime_unicode_hex_input_command: Option<String>,
@@ -92,6 +96,27 @@ impl Default for Config {
             middle_click_delay_patterns: vec![],
             blocked_windows: vec![],
             blocked_window_patterns: vec![],
+
+            #[rustfmt::skip]
+            ignore_patterns: vec![
+                IgnorePatternConfig::complete_ignore(r#"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*"#),
+                IgnorePatternConfig::complete_ignore(r#"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"#),
+                IgnorePatternConfig::complete_ignore(r#"AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}"#),
+                IgnorePatternConfig::complete_ignore(r#"(?i)\bauthorization:\s*(?:bearer|basic|token)\s+\S{8,}"#),
+                IgnorePatternConfig::complete_ignore(r#"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{20,}=*"#),
+                IgnorePatternConfig::complete_ignore(r#"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b"#),
+                IgnorePatternConfig::complete_ignore(r#"AccountKey=[A-Za-z0-9+/=]{60,}"#),
+                IgnorePatternConfig::complete_ignore(r#"\bdo[opr]_v1_[a-f0-9]{64}\b"#),
+                IgnorePatternConfig::complete_ignore(r#"\bhv[sbr]\.[A-Za-z0-9_-]{24,}"#),
+                IgnorePatternConfig::complete_ignore(r#"\bgh[pousr]_[A-Za-z0-9]{36,255}\b"#),
+                IgnorePatternConfig::complete_ignore(r#"\bgithub_pat_[A-Za-z0-9_]{60,}"#),
+                IgnorePatternConfig::complete_ignore(r#"\bglpat-[A-Za-z0-9_-]{20,}"#),
+                IgnorePatternConfig::complete_ignore(r#"\bnpm_[A-Za-z0-9]{36}\b"#),
+                IgnorePatternConfig::complete_ignore(r#"\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}"#),
+                IgnorePatternConfig::complete_ignore(r#"\b(?:https?|ftps?|sftp|ssh|git\+https?|postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^/\s:@]+:[^/\s:@]+@\S+"#),
+            ],
+
+            ignore_pattern_rules: vec![],
             switch_ime_command: None,
             ime_unicode_input_command: None,
             ime_unicode_hex_input_command: None,
@@ -348,6 +373,7 @@ impl Config {
 
         config.compile_middle_click_delay_patterns()?;
         config.compile_blocked_window_patterns()?;
+        config.compile_ignore_patterns()?;
 
         debug!("config: {config:#?}");
         Ok(config)
@@ -375,6 +401,32 @@ impl Config {
                     .case_insensitive(true)
                     .build()
                     .with_context(|| format!("invalid blocked_windows regex: {pattern:?}"))
+            })
+            .collect::<Result<_>>()?;
+        Ok(())
+    }
+
+    fn compile_ignore_patterns(&mut self) -> Result<()> {
+        self.ignore_pattern_rules = self
+            .ignore_patterns
+            .iter()
+            .map(|config| {
+                let regex = Regex::new(&config.pattern).with_context(|| {
+                    format!("invalid ignore_patterns regex: {:?}", config.pattern)
+                })?;
+                let ttl = match &config.ttl {
+                    Some(g) => parse_finite_duration(g)
+                        .map_err(|err| {
+                            debug!("invalid `ttl`: {err:?}");
+                            anyhow!("invalid ignore_patterns ttl: {:?}, expected duration like \"30m\", \"1h30m\" or \"90\"", config.ttl)
+                        })?,
+                    None => Duration::ZERO,
+                };
+
+                Ok(IgnorePatternRule {
+                    pattern: regex,
+                    ttl,
+                })
             })
             .collect::<Result<_>>()?;
         Ok(())
@@ -547,37 +599,12 @@ impl FromStr for PauseDuration {
             return Ok(Self::Infinite);
         }
 
-        let mut total = Duration::ZERO;
-        let mut rest = value;
-        while !rest.is_empty() {
-            let digits_len = rest
-                .find(|c: char| !c.is_ascii_digit())
-                .unwrap_or(rest.len());
-            let (digits, tail) = rest.split_at(digits_len);
-            if digits.is_empty() {
-                return Err(ParsePauseDurationError);
-            }
-
-            let count: u64 = digits.parse().map_err(|_| ParsePauseDurationError)?;
-            if digits.len() == value.len() {
-                total += Duration::from_secs(count);
-                break;
-            }
-
-            let Some(unit) = tail.chars().next() else {
-                return Err(ParsePauseDurationError);
-            };
-            let unit_secs: u64 = match unit {
-                's' => 1,
-                'm' => 60,
-                'h' => 3600,
-                _ => return Err(ParsePauseDurationError),
-            };
-            total += Duration::from_secs(count * unit_secs);
-            rest = &tail[1..];
-        }
-
-        Ok(Self::Finite(total))
+        parse_finite_duration(value)
+            .map(Self::Finite)
+            .map_err(|err| {
+                debug!("invalid finite pause duration value: {err:?}");
+                ParsePauseDurationError
+            })
     }
 }
 
@@ -626,6 +653,67 @@ impl Display for ParsePauseDurationError {
             "expected duration like \"30m\", \"1h30m\", \"90\" or \"inf\"",
         )
     }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct IgnorePatternConfig {
+    pub pattern: String,
+    pub ttl: Option<String>,
+}
+
+impl IgnorePatternConfig {
+    fn complete_ignore(pattern: &str) -> Self {
+        Self {
+            pattern: pattern.to_string(),
+            ttl: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IgnorePatternRule {
+    pub pattern: Regex,
+    pub ttl: Duration,
+}
+
+fn parse_finite_duration(value: &str) -> Result<Duration> {
+    let mut total = Duration::ZERO;
+    let mut rest = value;
+    while !rest.is_empty() {
+        let digits_len = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        let (digits, tail) = rest.split_at(digits_len);
+        if digits.is_empty() {
+            bail!("missing `digits`");
+        }
+
+        let count: u64 = digits
+            .parse()
+            .with_context(|| format!("invalid `digits`: {digits}"))?;
+        if digits.len() == value.len() {
+            total += Duration::from_secs(count);
+            break;
+        }
+
+        let Some(unit) = tail.chars().next() else {
+            bail!("missing `unit`");
+        };
+        let unit_secs: u64 = match unit {
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
+            _ => bail!("invalid `unit`: {unit}"),
+        };
+        let Some(secs) = count.checked_mul(unit_secs) else {
+            bail!("`{unit}` count too large: {count}");
+        };
+        total += Duration::from_secs(secs);
+        rest = &tail[1..];
+    }
+
+    Ok(total)
 }
 
 struct NonEmptyUnique<S>(PhantomData<S>);

@@ -89,6 +89,10 @@ where
         self.map.get(key)
     }
 
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.map.get_mut(key)
+    }
+
     pub fn get_by_index(&self, index: usize) -> Option<(&K, &V)> {
         self.keys.get(index).and_then(|k| self.map.get_key_value(k))
     }

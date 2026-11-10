@@ -1,4 +1,4 @@
-use std::{mem, range::Range, sync::Arc};
+use std::{mem, range::Range, sync::Arc, time::Duration};
 
 use crate::search::{SearchMatchedBytes, SearchMatchedGroups};
 use egui::{
@@ -248,6 +248,7 @@ impl ClipboardButton {
                 let is_active = state.is_active;
                 let is_pinned = state.is_pinned;
                 let is_bookmarked = state.is_bookmarked;
+                let expiry_remaining = state.expiry_remaining;
                 let keyboard_hint = state.keyboard_hint;
                 let matches = state.matches.as_ref();
                 let raw = state.raw.as_ref();
@@ -575,6 +576,10 @@ impl ClipboardButton {
                         let pin_center = rect.min + Vec2::splat(self.pin_size / 2.0);
                         ui.painter()
                             .circle_filled(pin_center, self.pin_size, self.pin_color);
+                    }
+
+                    if let Some(_remaining) = expiry_remaining {
+                        // TODO: remaining indicator
                     }
 
                     if is_bookmarked {
@@ -1280,6 +1285,7 @@ pub struct ClipboardButtonState<'a> {
     is_active: bool,
     is_pinned: bool,
     is_bookmarked: bool,
+    expiry_remaining: Option<Duration>,
     keyboard_hint: Option<&'static str>,
     matches: Option<ButtonTexts<(&'a str, &'a SearchMatchedBytes)>>,
     raw: Option<RawMatch<'a>>,
@@ -1301,6 +1307,12 @@ impl<'a> ClipboardButtonState<'a> {
     #[inline]
     pub fn is_bookmarked(mut self, is_bookmarked: bool) -> Self {
         self.is_bookmarked = is_bookmarked;
+        self
+    }
+
+    #[inline]
+    pub fn expiry_remaining(mut self, remaining: Duration) -> Self {
+        self.expiry_remaining = Some(remaining);
         self
     }
 

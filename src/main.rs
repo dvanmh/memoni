@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use egui::Modifiers;
 use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
+use memoni::config::IgnorePatternRule;
 use memoni::config::{Config, PauseDuration, WindowPositionMode};
 use memoni::item_list::ItemList;
 use memoni::keymap_action::KeymapAction;
@@ -51,6 +52,7 @@ const MEMONI_TOKEN: mio::Token = mio::Token(2);
 const KEYBOARD_GRAB_RETRY_TOKEN: mio::Token = mio::Token(3);
 const POINTER_GRAB_RETRY_TOKEN: mio::Token = mio::Token(4);
 const ATSPI_TOKEN: mio::Token = mio::Token(5);
+const EXPIRY_TOKEN: mio::Token = mio::Token(6);
 
 enum Args {
     Client(ClientArgs),
@@ -369,22 +371,8 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     let mut search = Search::new();
 
     let persistence = Persistence::new(args.selection, &display_id)?;
-    let (history, mut bookmarks) = persistence.load_selection_data()?;
-    let mut selection = Selection::new(
-        history,
-        &window,
-        args.selection,
-        &config,
-        // XFixes sends a SelectionNotify for each change while the user drags the mouse to adjust selection.
-        // Debounce to merge consecutive items with similar text.
-        args.selection == SelectionType::PRIMARY,
-    )?;
-    let mut paster = PasteServer::new(&window, &key_converter, args.selection, &config)?;
-
-    let mut ui = Ui::new(&config)?;
-    for (_, item) in selection.history.iter().chain(bookmarks.iter()) {
-        ui.build_button_widget(item)?;
-    }
+    let (mut history, mut bookmarks) = persistence.load_selection_data()?;
+    check_ignore_patterns_matchings(&config.ignore_pattern_rules, &mut history, &mut bookmarks);
 
     let text_caret_requested = config
         .window_position_mode
@@ -415,6 +403,23 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
         }
     };
     let mut poll_events = mio::Events::with_capacity(8);
+
+    let mut selection = Selection::new(
+        history,
+        &window,
+        args.selection,
+        &config,
+        &sources.expiry_timer,
+        // XFixes sends a SelectionNotify for each change while the user drags the mouse to adjust selection.
+        // Debounce to merge consecutive items with similar text.
+        args.selection == SelectionType::PRIMARY,
+    )?;
+    let mut paster = PasteServer::new(&window, &key_converter, args.selection, &config)?;
+
+    let mut ui = Ui::new(&config)?;
+    for (_, item) in selection.history.iter().chain(bookmarks.iter()) {
+        ui.build_button_widget(item)?;
+    }
 
     if let Some(channel) = &sources.caret_tracker_channel
         && let Err(err) = AtspiCaretTracker::new(channel.clone())
@@ -610,6 +615,24 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                                     window.clear_text_caret();
                                 }
                             }
+                        }
+                    }
+                    EXPIRY_TOKEN => {
+                        let expired = selection.remove_expired()?;
+                        let expired_count = expired.len();
+                        for expired_item in expired {
+                            if state.mode == AppMode::Search {
+                                search.remove_id(expired_item.id());
+                            }
+
+                            let still_referenced = bookmarks.contains(expired_item.id());
+                            if !still_referenced {
+                                ui.remove_button_widgets(std::iter::once(expired_item));
+                            }
+                        }
+
+                        if expired_count > 0 {
+                            info!("{expired_count} selection items expired and removed");
                         }
                     }
                     _ => unreachable!(),
@@ -980,6 +1003,20 @@ fn handle_key_action(
             }
         }
         KeyAction::Pin => {
+            if !state.bookmark_view {
+                let is_ephemeral = selection
+                    .history
+                    .get(state.active_id)
+                    .is_some_and(|item| item.is_ephemeral());
+                if is_ephemeral {
+                    info!(
+                        "pinning expiring item {}, cancelling its expiry",
+                        state.active_id
+                    );
+                    selection.cancel_expiry(state.active_id);
+                }
+            }
+
             let is_pinned = active_list_mut(selection, bookmarks, state.bookmark_view)
                 .toggle_pin(state.active_id)?;
             if is_pinned {
@@ -1025,7 +1062,7 @@ fn handle_key_action(
                     info!("selection item {} unbookmarked", state.active_id);
                 } else {
                     if let Some(item) = selection.history.get(state.active_id) {
-                        bookmarks.insert_after_pinned(state.active_id, item.data().clone());
+                        bookmarks.insert_after_pinned(state.active_id, item.data().clone(), None);
                         info!("selection item {} bookmarked", state.active_id);
                     } else {
                         warn!(
@@ -1286,6 +1323,37 @@ fn search_resync_visible_first(
     ui.reset_scroll_offset();
 }
 
+fn check_ignore_patterns_matchings(
+    rules: &[memoni::config::IgnorePatternRule],
+    history: &mut ItemList,
+    bookmarks: &mut ItemList,
+) {
+    let (normal_ignored, pinned_ignored) = get_ignored_items(rules, history);
+    if !normal_ignored.is_empty() {
+        for &id in &normal_ignored {
+            history.remove(id);
+        }
+        info!(
+            "removed {} items matching ignore patterns",
+            normal_ignored.len()
+        );
+    }
+    if !pinned_ignored.is_empty() {
+        warn!(
+            "{} pinned items matching ignore patterns, not removed",
+            pinned_ignored.len()
+        );
+    }
+
+    let (bookmarked_ignored, pinned_bookmarked_ignored) = get_ignored_items(rules, bookmarks);
+    if !bookmarked_ignored.is_empty() || !pinned_bookmarked_ignored.is_empty() {
+        warn!(
+            "{} bookmarked items matching ignore patterns, not removed",
+            bookmarked_ignored.len() + pinned_bookmarked_ignored.len()
+        );
+    }
+}
+
 fn create_poll<P: AsRef<Path> + std::fmt::Debug>(
     conn: &XCBConnection,
     socket_path: P,
@@ -1344,6 +1412,15 @@ fn create_poll<P: AsRef<Path> + std::fmt::Debug>(
         mio::Interest::READABLE,
     )?;
 
+    debug!("registering expiry timer source");
+    let expiry_timer =
+        TimerfdSource::new().map_err(|e| anyhow!("failed to create expiry timerfd: {e}"))?;
+    poll.registry().register(
+        &mut SourceFd(&expiry_timer.as_fd().as_raw_fd()),
+        EXPIRY_TOKEN,
+        mio::Interest::READABLE,
+    )?;
+
     let caret_tracker_channel = if atspi_enabled {
         debug!("registering AT-SPI caret tracker's slot and waker");
         Some(Arc::new(atspi_caret_tracker::EventChannel {
@@ -1360,6 +1437,7 @@ fn create_poll<P: AsRef<Path> + std::fmt::Debug>(
         signals,
         keyboard_grab_timer,
         pointer_grab_timer,
+        expiry_timer,
         caret_tracker_channel,
     })
 }
@@ -1370,6 +1448,7 @@ struct PollSources {
     signals: Signals,
     keyboard_grab_timer: TimerfdSource,
     pointer_grab_timer: TimerfdSource,
+    expiry_timer: TimerfdSource,
     caret_tracker_channel: Option<Arc<atspi_caret_tracker::EventChannel<CaretTrackerEvent>>>,
 }
 
@@ -1413,4 +1492,25 @@ fn format_pause_state(pause: Pause) -> String {
         .describe(Instant::now())
         .map(|d| format!("paused ({d})"))
         .unwrap_or_else(|| "not paused".to_string())
+}
+
+fn get_ignored_items(rules: &[IgnorePatternRule], items: &ItemList) -> (Vec<u64>, Vec<u64>) {
+    let mut normal_ignored = vec![];
+    let mut pinned_ignored = vec![];
+
+    for (&id, item) in items.iter() {
+        if let Some(plain) = &item.text_data().plain
+            && rules
+                .iter()
+                .any(|rule| rule.pattern.is_match(plain.as_ref()))
+        {
+            if item.is_pinned() {
+                pinned_ignored.push(id);
+            } else {
+                normal_ignored.push(id);
+            }
+        }
+    }
+
+    (normal_ignored, pinned_ignored)
 }

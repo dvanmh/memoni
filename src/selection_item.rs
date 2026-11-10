@@ -3,6 +3,7 @@ use std::{
     cell::Cell,
     collections::BTreeMap,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use bincode::{Decode, Encode};
@@ -47,6 +48,7 @@ struct SelectionItemData {
     id: u64,
     data: SelectionData,
     pinned: Cell<bool>,
+    expiry_deadline: Cell<Option<Instant>>,
 }
 
 self_cell!(
@@ -61,12 +63,13 @@ self_cell!(
 );
 
 impl SelectionItem {
-    pub fn create(id: u64, data: SelectionData) -> Self {
+    pub fn create(id: u64, data: SelectionData, expiry_deadline: Option<Instant>) -> Self {
         Self::new(
             SelectionItemData {
                 id,
                 data,
                 pinned: Cell::new(false),
+                expiry_deadline: Cell::new(expiry_deadline),
             },
             |item_data| extract_text_from_data(item_data.id, &item_data.data),
         )
@@ -86,6 +89,24 @@ impl SelectionItem {
 
     pub fn set_pinned(&mut self, pinned: bool) {
         self.borrow_owner().pinned.set(pinned)
+    }
+
+    pub fn expiry_deadline(&self) -> Option<Instant> {
+        self.borrow_owner().expiry_deadline.get()
+    }
+
+    pub fn is_ephemeral(&self) -> bool {
+        self.expiry_deadline().is_some()
+    }
+
+    pub fn set_expiry_deadline(&mut self, deadline: Instant) {
+        let owner = self.borrow_owner();
+        owner.expiry_deadline.set(Some(deadline));
+    }
+
+    pub fn clear_expiry_deadline(&mut self) {
+        let owner = self.borrow_owner();
+        owner.expiry_deadline.set(None);
     }
 
     pub fn text_data(&self) -> &SelectionTextData<'_> {
@@ -221,7 +242,7 @@ impl<Context> Decode<Context> for SelectionItem {
     ) -> Result<Self, bincode::error::DecodeError> {
         let id: u64 = bincode::Decode::decode(decoder)?;
         let data: SelectionData = bincode::Decode::decode(decoder)?;
-        Ok(Self::create(id, data))
+        Ok(Self::create(id, data, None))
     }
 }
 
