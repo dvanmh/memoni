@@ -741,6 +741,8 @@ impl<'a> Selection<'a> {
                 if self.expiry_queue.is_empty() {
                     self.expiry_timer.set_timer((ttl.as_millis() + 1) as u64)?;
                 }
+
+                self.expiry_queue.retain(|&(_, id)| id != insert_item_id);
                 self.expiry_queue
                     .push((expiry_deadline.unwrap(), insert_item_id));
             }
