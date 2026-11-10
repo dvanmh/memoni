@@ -510,6 +510,16 @@ pause_foreground = "#ffffff"
 # default: "#78350f"
 pause_background = "#92400edd"
 
+# Ignored item's expiry countdown chip foreground color
+#
+# default: "#cccccc"
+expiry_countdown_foreground = "#ffffff"
+
+# Ignored item's expiry countdown chip background color
+#
+# default: "#dd2c2c"
+expiry_countdown_background = "#e24b4a"
+
 
 # Selection-specific overrides
 # Any field can be overridden under [CLIPBOARD] or [PRIMARY]

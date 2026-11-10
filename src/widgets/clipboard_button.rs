@@ -1,6 +1,10 @@
+use core::fmt;
 use std::{mem, range::Range, sync::Arc, time::Duration};
 
-use crate::search::{SearchMatchedBytes, SearchMatchedGroups};
+use crate::{
+    search::{SearchMatchedBytes, SearchMatchedGroups},
+    utils::format_duration,
+};
 use egui::{
     Color32, CornerRadius, FontId, Galley, Image, Mesh, Pos2, Rect, Response, RichText, Sense,
     Stroke, StrokeKind, TextFormat, TextStyle, TextWrapMode, TextureHandle, Ui, UiBuilder, Vec2,
@@ -30,6 +34,8 @@ pub struct ClipboardButton {
     keyboard_hints: &'static [&'static str],
     keyboard_hint_foreground: Color32,
     search_match_background: Color32,
+    expiry_countdown_foreground: Color32,
+    expiry_countdown_background: Color32,
 
     label_size: f32,
     label_color: Color32,
@@ -47,7 +53,11 @@ pub struct ClipboardButton {
     color_preview_corner_radius: u8,
     color_preview_background: Option<TextureHandle>,
 
+    keyboard_hint_width: Option<f32>,
+    long_expiry_countdown_width: Option<f32>,
+    short_expiry_countdown_width: Option<f32>,
     text_cache: ButtonTexts<PaintText>,
+    prev_render_text_width: f32,
 }
 
 impl ClipboardButton {
@@ -143,6 +153,24 @@ impl ClipboardButton {
     #[inline]
     pub fn search_match_background(mut self, search_match_background: impl Into<Color32>) -> Self {
         self.search_match_background = search_match_background.into();
+        self
+    }
+
+    #[inline]
+    pub fn expiry_countdown_foreground(
+        mut self,
+        expiry_countdown_foreground: impl Into<Color32>,
+    ) -> Self {
+        self.expiry_countdown_foreground = expiry_countdown_foreground.into();
+        self
+    }
+
+    #[inline]
+    pub fn expiry_countdown_background(
+        mut self,
+        expiry_countdown_background: impl Into<Color32>,
+    ) -> Self {
+        self.expiry_countdown_background = expiry_countdown_background.into();
         self
     }
 
@@ -254,8 +282,9 @@ impl ClipboardButton {
                 let raw = state.raw.as_ref();
 
                 // TODO: make these configurable?
-                let keyboard_hint_gap = 10.0;
-                let keyboard_hint_size = 11.0;
+                let hint_gap = 8.0;
+                let hint_size = 11.0;
+                let expiry_countdown_padding = Vec2::new(6.0, 2.0);
 
                 let padding = if self.preview.is_some()
                     && let Some(with_preview_padding) = self.with_preview_padding
@@ -276,25 +305,67 @@ impl ClipboardButton {
                     text_width -= self.color_preview_size + padding.x;
                 }
 
-                let keyboard_hint_width =
-                    keyboard_hint_width(ui, self.keyboard_hints, keyboard_hint_size);
+                let keyboard_hint_width = *self.keyboard_hint_width.get_or_insert_with(|| {
+                    calc_keyboard_hint_width(ui, self.keyboard_hints, hint_size)
+                });
                 if keyboard_hint_width > 0.0 {
-                    text_width -= keyboard_hint_width + keyboard_hint_gap;
+                    text_width -= keyboard_hint_width + hint_gap;
                 }
 
                 let keyboard_hint_galley = keyboard_hint.map(|sh| {
                     WidgetText::RichText(Arc::new(
                         RichText::new(sh)
-                            .size(keyboard_hint_size)
+                            .size(hint_size)
                             .color(self.keyboard_hint_foreground),
                     ))
                     .into_galley(
                         ui,
                         Some(TextWrapMode::Truncate),
-                        desired_width * 0.2,
+                        keyboard_hint_width,
                         TextStyle::Button,
                     )
                 });
+
+                let (expiry_countdown_width, expiry_countdown_galley) = if let Some(remaining) =
+                    expiry_remaining
+                {
+                    let expiry_countdown_width = if remaining > Duration::from_hours(1) {
+                        *self
+                            .long_expiry_countdown_width
+                            .get_or_insert_with(|| calc_expiry_countdown_width(ui, hint_size, true))
+                    } else {
+                        *self.short_expiry_countdown_width.get_or_insert_with(|| {
+                            calc_expiry_countdown_width(ui, hint_size, false)
+                        })
+                    } + expiry_countdown_padding.x * 2.0;
+                    text_width -= expiry_countdown_width + hint_gap;
+
+                    let s = if remaining > Duration::from_hours(100) {
+                        fmt::from_fn(|f| format_duration(&Duration::from_hours(100), f)).to_string()
+                            + "+"
+                    } else {
+                        fmt::from_fn(|f| format_duration(&remaining, f)).to_string()
+                    };
+
+                    (
+                        expiry_countdown_width,
+                        Some(
+                            WidgetText::RichText(Arc::new(
+                                RichText::new(s)
+                                    .size(hint_size)
+                                    .color(self.expiry_countdown_foreground),
+                            ))
+                            .into_galley(
+                                ui,
+                                Some(TextWrapMode::Truncate),
+                                expiry_countdown_width,
+                                TextStyle::Button,
+                            ),
+                        ),
+                    )
+                } else {
+                    (0.0, None)
+                };
 
                 let label_height = display_text_height(ui, self.label_style());
                 let sublabel_height = if raw.is_some() {
@@ -336,6 +407,11 @@ impl ClipboardButton {
                     ui.allocate_exact_size(Vec2::new(desired_width, desired_height), Sense::HOVER);
 
                 if ui.is_rect_visible(rect) {
+                    if text_width != self.prev_render_text_width {
+                        self.invalidate_text_cache();
+                    }
+                    self.prev_render_text_width = text_width;
+
                     let visuals = &ui.style().visuals.widgets.inactive;
                     let bg_fill = if is_active {
                         ui.style().visuals.widgets.active.weak_bg_fill
@@ -565,10 +641,34 @@ impl ClipboardButton {
                         paint_text(ui, text_pos, text_width, self.search_match_background, text);
                     }
 
+                    cursor_x += text_width;
+
+                    if let Some(galley) = expiry_countdown_galley {
+                        cursor_x += hint_gap;
+
+                        let bg_size = Vec2::new(
+                            expiry_countdown_width,
+                            galley.rect.height() + expiry_countdown_padding.y * 2.0,
+                        );
+                        let bg_pos = Pos2::new(cursor_x, rect.center().y - bg_size.y / 2.0);
+                        let bg_rect = Rect::from_min_size(bg_pos, bg_size);
+
+                        let radius = bg_rect.height() / 2.0;
+                        ui.painter()
+                            .rect_filled(bg_rect, radius, self.expiry_countdown_background);
+
+                        let text_pos = bg_pos + bg_size / 2.0 - galley.rect.size() / 2.0;
+                        ui.painter().galley(text_pos, galley, visuals.text_color());
+
+                        cursor_x += bg_rect.width();
+                    }
+
                     if let Some(galley) = keyboard_hint_galley {
-                        cursor_x += text_width + keyboard_hint_gap;
-                        let text_pos =
-                            Pos2::new(cursor_x, rect.center().y - galley.rect.height() / 2.0);
+                        cursor_x += hint_gap;
+                        let text_pos = Pos2::new(
+                            cursor_x + keyboard_hint_width / 2.0 - galley.rect.width() / 2.0,
+                            rect.center().y - galley.rect.height() / 2.0,
+                        );
                         ui.painter().galley(text_pos, galley, visuals.text_color());
                     }
 
@@ -576,10 +676,6 @@ impl ClipboardButton {
                         let pin_center = rect.min + Vec2::splat(self.pin_size / 2.0);
                         ui.painter()
                             .circle_filled(pin_center, self.pin_size, self.pin_color);
-                    }
-
-                    if let Some(_remaining) = expiry_remaining {
-                        // TODO: remaining indicator
                     }
 
                     if is_bookmarked {
@@ -623,19 +719,90 @@ impl ClipboardButton {
 
     pub fn invalidate_text_cache(&mut self) {
         self.text_cache = ButtonTexts::default();
+        self.keyboard_hint_width = None;
+        self.long_expiry_countdown_width = None;
+        self.short_expiry_countdown_width = None;
     }
 }
 
-fn keyboard_hint_width(ui: &Ui, hints: &[&str], size: f32) -> f32 {
+fn calc_keyboard_hint_width(ui: &Ui, hints: &[&str], size: f32) -> f32 {
+    max_string_font_width(ui, hints.iter(), size).unwrap().1
+}
+
+fn calc_expiry_countdown_width(ui: &Ui, size: f32, long: bool) -> f32 {
+    let digits_string: String = ('0'..='9').collect();
+    let max_width_digit = max_string_font_width(
+        ui,
+        digits_string
+            .char_indices()
+            .map(|(i, _)| &digits_string[i..i + 1]),
+        size,
+    )
+    .and_then(|(d, _)| d.parse::<u64>().ok())
+    .unwrap();
+    let max_width_hour_digit = max_string_font_width(
+        ui,
+        digits_string
+            .char_indices()
+            .skip(1)
+            .map(|(i, _)| &digits_string[i..i + 1]),
+        size,
+    )
+    .and_then(|(d, _)| d.parse::<u64>().ok())
+    .unwrap();
+    let max_width_minsec_digit = max_string_font_width(
+        ui,
+        digits_string
+            .char_indices()
+            .skip(1)
+            .take(6)
+            .map(|(i, _)| &digits_string[i..i + 1]),
+        size,
+    )
+    .and_then(|(d, _)| d.parse::<u64>().ok())
+    .unwrap();
+
+    let hours = if long {
+        Duration::from_hours(max_width_hour_digit * 10 + max_width_digit)
+    } else {
+        Duration::ZERO
+    };
+    let minutes = Duration::from_mins(max_width_minsec_digit * 10 + max_width_digit);
+    let seconds = Duration::from_secs(max_width_minsec_digit * 10 + max_width_digit);
+
+    let s = fmt::from_fn(|f| format_duration(&(hours + minutes + seconds), f)).to_string();
+    let galley = ui
+        .painter()
+        .layout_no_wrap(s, FontId::proportional(size), Color32::default());
+
+    galley.size().x
+}
+
+fn max_string_font_width<'a, S>(
+    ui: &Ui,
+    candidates: impl Iterator<Item = &'a S>,
+    size: f32,
+) -> Option<(&'a str, f32)>
+where
+    S: AsRef<str> + ?Sized + 'a,
+{
     ui.fonts_mut(|fonts| {
-        hints
-            .iter()
-            .map(|hint| {
-                hint.chars()
-                    .map(|c| fonts.glyph_width(&FontId::proportional(size), c))
-                    .sum::<f32>()
+        candidates
+            .map(|str| {
+                Some((
+                    str.as_ref(),
+                    str.as_ref()
+                        .chars()
+                        .map(|c| fonts.glyph_width(&FontId::proportional(size), c))
+                        .sum::<f32>(),
+                ))
             })
-            .fold(0.0, f32::max)
+            .fold(None, |a, b| match (a, b) {
+                (Some(a @ (_, wa)), Some(b @ (_, wb))) => Some(if wb > wa { b } else { a }),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            })
     })
 }
 

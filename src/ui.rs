@@ -1474,6 +1474,8 @@ impl<'a> Ui<'a> {
             })
             .keyboard_hint_foreground(config.theme.secondary_foreground)
             .search_match_background(config.theme.search_match)
+            .expiry_countdown_foreground(config.theme.expiry_countdown_foreground)
+            .expiry_countdown_background(config.theme.expiry_countdown_background)
             .label_size(config.font.size)
             .label_color(config.theme.foreground)
             .sublabel_size(config.font.secondary_size)

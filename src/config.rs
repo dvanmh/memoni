@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use egui::Color32;
 use egui::ecolor::ParseHexColorError;
 use indexmap::IndexSet;
@@ -19,6 +19,7 @@ use xkeysym::Keysym;
 use crate::{
     fonts::{NOTO_MATH_CONFIG_NAME, NOTO_SANS_CONFIG_NAME, SYSTEM_FALLBACK_CONFIG_NAME},
     selection::SelectionType,
+    utils::{format_duration, parse_duration_from_string},
 };
 
 #[derive(Deserialize, Debug, Default)]
@@ -282,6 +283,10 @@ pub struct ThemeConfig {
     pub pause_foreground: Color,
     #[serde_as(as = "DisplayFromStr")]
     pub pause_background: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub expiry_countdown_foreground: Color,
+    #[serde_as(as = "DisplayFromStr")]
+    pub expiry_countdown_background: Color,
 }
 
 impl Default for ThemeConfig {
@@ -316,6 +321,8 @@ impl Default for ThemeConfig {
             bookmark_color: Color(0xffca190c),
             pause_foreground: Color(0xffcccccc),
             pause_background: Color(0xff78350f),
+            expiry_countdown_foreground: Color(0xffcccccc),
+            expiry_countdown_background: Color(0xffdd2c2c),
         }
     }
 }
@@ -415,7 +422,7 @@ impl Config {
                     format!("invalid ignore_patterns regex: {:?}", config.pattern)
                 })?;
                 let ttl = match &config.ttl {
-                    Some(g) => parse_finite_duration(g)
+                    Some(g) => parse_duration_from_string(g)
                         .map_err(|err| {
                             debug!("invalid `ttl`: {err:?}");
                             anyhow!("invalid ignore_patterns ttl: {:?}, expected duration like \"30m\", \"1h30m\" or \"90\"", config.ttl)
@@ -599,7 +606,7 @@ impl FromStr for PauseDuration {
             return Ok(Self::Infinite);
         }
 
-        parse_finite_duration(value)
+        parse_duration_from_string(value)
             .map(Self::Finite)
             .map_err(|err| {
                 debug!("invalid finite pause duration value: {err:?}");
@@ -612,24 +619,7 @@ impl Display for PauseDuration {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Infinite => write!(f, "inf"),
-            Self::Finite(d) => {
-                let secs = d.as_secs() + (d.subsec_nanos() > 0) as u64;
-                let h = secs / 3600;
-                let m = (secs % 3600) / 60;
-                let s = secs % 60;
-
-                if h > 0 {
-                    write!(f, "{h}h")?;
-                }
-                if m > 0 {
-                    write!(f, "{m}m")?;
-                }
-                if s > 0 || secs == 0 {
-                    write!(f, "{s}s")?;
-                }
-
-                Ok(())
-            }
+            Self::Finite(d) => format_duration(d, f),
         }
     }
 }
@@ -675,45 +665,6 @@ impl IgnorePatternConfig {
 pub struct IgnorePatternRule {
     pub pattern: Regex,
     pub ttl: Duration,
-}
-
-fn parse_finite_duration(value: &str) -> Result<Duration> {
-    let mut total = Duration::ZERO;
-    let mut rest = value;
-    while !rest.is_empty() {
-        let digits_len = rest
-            .find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(rest.len());
-        let (digits, tail) = rest.split_at(digits_len);
-        if digits.is_empty() {
-            bail!("missing `digits`");
-        }
-
-        let count: u64 = digits
-            .parse()
-            .with_context(|| format!("invalid `digits`: {digits}"))?;
-        if digits.len() == value.len() {
-            total += Duration::from_secs(count);
-            break;
-        }
-
-        let Some(unit) = tail.chars().next() else {
-            bail!("missing `unit`");
-        };
-        let unit_secs: u64 = match unit {
-            's' => 1,
-            'm' => 60,
-            'h' => 3600,
-            _ => bail!("invalid `unit`: {unit}"),
-        };
-        let Some(secs) = count.checked_mul(unit_secs) else {
-            bail!("`{unit}` count too large: {count}");
-        };
-        total += Duration::from_secs(secs);
-        rest = &tail[1..];
-    }
-
-    Ok(total)
 }
 
 struct NonEmptyUnique<S>(PhantomData<S>);

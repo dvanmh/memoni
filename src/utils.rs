@@ -1,6 +1,7 @@
-use std::borrow::Cow;
+use core::fmt;
+use std::{borrow::Cow, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result, bail};
 use egui::{CursorIcon, Key};
 use x11rb::{
     protocol::xproto::{AtomEnum, ConnectionExt as _, GetPropertyReply},
@@ -387,4 +388,62 @@ pub fn get_x11_window_class(conn: &XCBConnection, window: u32) -> Result<Option<
     let class_name = parts.next().unwrap_or("").to_string();
 
     Ok(Some((instance_name, class_name)))
+}
+
+pub fn format_duration(duration: &Duration, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let secs = duration.as_secs() + (duration.subsec_nanos() > 0) as u64;
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+
+    if h > 0 {
+        write!(f, "{h}h")?;
+    }
+    if m > 0 {
+        write!(f, "{m}m")?;
+    }
+    if s > 0 || secs == 0 {
+        write!(f, "{s}s")?;
+    }
+
+    Ok(())
+}
+
+pub fn parse_duration_from_string(string: &str) -> Result<Duration> {
+    let mut total = Duration::ZERO;
+    let mut rest = string;
+    while !rest.is_empty() {
+        let digits_len = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        let (digits, tail) = rest.split_at(digits_len);
+        if digits.is_empty() {
+            bail!("missing `digits`");
+        }
+
+        let count: u64 = digits
+            .parse()
+            .with_context(|| format!("invalid `digits`: {digits}"))?;
+        if digits.len() == string.len() {
+            total += Duration::from_secs(count);
+            break;
+        }
+
+        let Some(unit) = tail.chars().next() else {
+            bail!("missing `unit`");
+        };
+        let unit_secs: u64 = match unit {
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
+            _ => bail!("invalid `unit`: {unit}"),
+        };
+        let Some(secs) = count.checked_mul(unit_secs) else {
+            bail!("`{unit}` count too large: {count}");
+        };
+        total += Duration::from_secs(secs);
+        rest = &tail[1..];
+    }
+
+    Ok(total)
 }
