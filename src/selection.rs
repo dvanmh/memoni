@@ -9,14 +9,14 @@ extern crate x11rb;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
-    fmt, mem,
+    fmt, fs, io, mem,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result};
 use log::{debug, error, info, trace, warn};
 use x11rb::protocol::{
-    Event,
+    Event, res,
     xfixes::{SelectionEvent, SelectionEventMask},
     xproto::{ConnectionExt as _, *},
 };
@@ -255,6 +255,10 @@ impl<'a> Selection<'a> {
                                 &self.window.conn,
                                 ev.owner,
                                 &self.config.ignore_window_rules,
+                            )? || is_process_ignored(
+                                &self.window.conn,
+                                ev.owner,
+                                &self.config.ignore_process_rules,
                             )? {
                                 info!("dropping selection from ignored owner {}", ev.owner);
                                 break 'blk;
@@ -881,6 +885,81 @@ fn is_window_ignored(conn: &XCBConnection, owner: u32, patterns: &[Regex]) -> Re
             false
         },
     )
+}
+
+fn is_process_ignored(conn: &XCBConnection, owner: u32, patterns: &[Regex]) -> Result<bool> {
+    if patterns.is_empty() {
+        return Ok(false);
+    }
+
+    let Some(pid) = owner_pid(conn, owner)? else {
+        return Ok(false);
+    };
+
+    let (comm, cmdline) = match pid_names(pid) {
+        Ok(result) => result,
+        Err(err) => {
+            debug!("no /proc entry for owner pid {pid}: {err:?}");
+            return Ok(false);
+        }
+    };
+
+    Ok(
+        if let Some(matched) = dual_matches(patterns, &comm, &cmdline) {
+            debug!("process {pid} comm {comm:?} cmdline {cmdline:?} matched {matched:?}");
+            true
+        } else {
+            false
+        },
+    )
+}
+
+fn owner_pid(conn: &XCBConnection, owner: u32) -> Result<Option<u32>> {
+    if conn
+        .extension_information(res::X11_EXTENSION_NAME)?
+        .is_none()
+    {
+        debug!("X-Resource extension not available");
+        return Ok(None);
+    }
+
+    let spec = res::ClientIdSpec {
+        client: owner,
+        mask: res::ClientIdMask::LOCAL_CLIENT_PID,
+    };
+    let reply = res::query_client_ids(conn, &[spec])?.reply()?;
+
+    Ok(reply
+        .ids
+        .iter()
+        .flat_map(|id| id.value.iter().copied())
+        .next())
+}
+
+fn pid_names(pid: u32) -> Result<(String, String)> {
+    let comm_path = format!("/proc/{pid}/comm");
+    let comm = fs::read_to_string(&comm_path)
+        .context(format!("failed to open {comm_path:?}"))?
+        .to_string();
+
+    let cmdline_path = format!("/proc/{pid}/cmdline");
+    let cmdline = match fs::read(&cmdline_path) {
+        Ok(bytes) => bytes
+            .split(|&b| b == 0)
+            .filter(|arg| !arg.is_empty())
+            .map(String::from_utf8_lossy)
+            .collect::<Vec<_>>()
+            .join(" "),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            debug!("/proc/{pid}/cmdline not found, falling back to empty cmdline");
+            "".to_string()
+        }
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!("failed to open {cmdline_path:?}")));
+        }
+    };
+
+    Ok((comm, cmdline))
 }
 
 fn dual_matches<'a>(patterns: &'a [Regex], val_1: &str, val_2: &str) -> Option<&'a Regex> {

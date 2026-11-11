@@ -64,6 +64,10 @@ pub struct Config {
     #[serde(skip)]
     pub ignore_window_rules: Vec<Regex>,
 
+    pub ignore_processes: Vec<String>,
+    #[serde(skip)]
+    pub ignore_process_rules: Vec<Regex>,
+
     pub ignore_contents: Vec<IgnoreContentConfig>,
     #[serde(skip)]
     pub ignore_content_rules: Vec<IgnoreContentRule>,
@@ -97,6 +101,8 @@ impl Default for Config {
             middle_click_delay_patterns: vec![],
             ignore_windows: vec![],
             ignore_window_rules: vec![],
+            ignore_processes: vec![],
+            ignore_process_rules: vec![],
 
             #[rustfmt::skip]
             ignore_contents: vec![
@@ -380,6 +386,7 @@ impl Config {
 
         config.compile_middle_click_delay_patterns()?;
         config.compile_ignore_window_rules()?;
+        config.compile_ignore_process_rules()?;
         config.compile_ignore_contents()?;
 
         debug!("config: {config:#?}");
@@ -408,6 +415,20 @@ impl Config {
                     .case_insensitive(true)
                     .build()
                     .with_context(|| format!("invalid ignore_windows regex: {pattern:?}"))
+            })
+            .collect::<Result<_>>()?;
+        Ok(())
+    }
+
+    fn compile_ignore_process_rules(&mut self) -> Result<()> {
+        self.ignore_process_rules = self
+            .ignore_processes
+            .iter()
+            .map(|pattern| {
+                RegexBuilder::new(pattern)
+                    .case_insensitive(true)
+                    .build()
+                    .with_context(|| format!("invalid ignore_processes regex: {pattern:?}"))
             })
             .collect::<Result<_>>()?;
         Ok(())

@@ -91,10 +91,19 @@ middle_click_delay_windows = ["^[Ff]irefox"]
 # Selection owner windows whose content will never be recorded in the history
 #
 # Each string is a case-insensitive regex matched against the WM_CLASS instance and class
-# names of the selection owner window.
+# names of the selection owner window. Windows that don't carry a WM_CLASS (some apps use
+# a dedicated, anonymous window as the selection owner) can be matched with ignore_processes instead.
 #
 # default: []
 ignore_windows = ["^IgnoredApp"]
+
+# Selection-owning processes whose content will never be recorded in the history
+#
+# Each string is a case-insensitive regex matched against the process name (comm) and the
+# full command line of the process that owns the selection.
+#
+# default: []
+ignore_processes = ["^ignored-cli"]
 
 # Clipboard content patterns that are scheduled for deletion after a period
 #
