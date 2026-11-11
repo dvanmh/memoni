@@ -277,28 +277,20 @@ impl<'a> Input<'a> {
                         Box::new(event_iter.chain(iter::once(Event::ModifiersChanged(*modifiers))));
                 }
 
-                let Some(key) = keysym_to_egui_key(Keysym::new(keysym.into())) else {
+                let Some(mut key) = keysym_to_egui_key(keysym) else {
                     trace!("unknown keysym: {keysym:?}");
                     break 'blk event_iter;
                 };
 
+                let raw_shift_value = modifiers.shift;
                 let caps_locked = ev.state.contains(KeyButMask::LOCK);
-                let modifiers = if caps_locked && is_letter_key(key) {
+                let mut modifiers = if caps_locked && is_letter_key(key) {
                     let mut modifiers_with_caps = *modifiers;
                     modifiers_with_caps.shift = !modifiers_with_caps.shift;
                     modifiers_with_caps
                 } else {
                     *modifiers
                 };
-
-                trace!("key: {key:?}, pressed={pressed}, keysym={keysym:?}, keycode={keycode}");
-                event_iter = Box::new(event_iter.chain(iter::once(Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed,
-                    repeat: false, // egui will fill this in for us!
-                    modifiers,
-                })));
 
                 if emit_text_events
                     && pressed
@@ -318,6 +310,26 @@ impl<'a> Input<'a> {
                         debug!("received unconvertable char keysym: {keysym:?}, keycode={keycode}");
                     }
                 }
+
+                if raw_shift_value
+                    && let Some(shifted_keysym) = self
+                        .key_converter
+                        .keycode_to_keysym_column(keycode.into(), 1)
+                    && let Some(shifted_key) = keysym_to_egui_key(shifted_keysym)
+                {
+                    trace!("key {key:?} shifted to {shifted_key:?}");
+                    key = shifted_key;
+                    modifiers.shift = false;
+                }
+
+                trace!("key: {key:?}, pressed={pressed}, keysym={keysym:?}, keycode={keycode}");
+                event_iter = Box::new(event_iter.chain(iter::once(Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed,
+                    repeat: false, // egui will fill this in for us!
+                    modifiers,
+                })));
 
                 event_iter
             }

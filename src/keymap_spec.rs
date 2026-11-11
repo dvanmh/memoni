@@ -175,7 +175,7 @@ pub static KEYMAP_SPECS: [KeymapSpec; 3] = [
                 plain!(Action::Key(KeyAction::ShowSearch)),
             ),
             KeymapEntry::new(
-                &["S-/"],
+                &["?"],
                 "Show help",
                 plain!(Action::Key(KeyAction::ShowHelp)),
             ),
