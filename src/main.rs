@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use egui::Modifiers;
 use env_logger::TimestampPrecision;
 use log::{LevelFilter, debug, info, warn};
-use memoni::config::IgnorePatternRule;
+use memoni::config::IgnoreContentRule;
 use memoni::config::{Config, PauseDuration, WindowPositionMode};
 use memoni::item_list::ItemList;
 use memoni::keymap_action::KeymapAction;
@@ -274,7 +274,7 @@ COMMANDS:
      next [N]
         Stops recording new clipboard items for the next N clipboard changes received.
         This count is independent of whether the item would be recorded (e.g., copies
-        from blocked apps still count). Default for N is 1.
+        from ignored apps still count). Default for N is 1.
         e.g., `pause next`, `pause next 3`
 
      inf
@@ -372,7 +372,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
 
     let persistence = Persistence::new(args.selection, &display_id)?;
     let (mut history, mut bookmarks) = persistence.load_selection_data()?;
-    check_ignore_patterns_matchings(&config.ignore_pattern_rules, &mut history, &mut bookmarks);
+    check_ignore_contents_matchings(&config.ignore_content_rules, &mut history, &mut bookmarks);
 
     let text_caret_requested = config
         .window_position_mode
@@ -1323,8 +1323,8 @@ fn search_resync_visible_first(
     ui.reset_scroll_offset();
 }
 
-fn check_ignore_patterns_matchings(
-    rules: &[memoni::config::IgnorePatternRule],
+fn check_ignore_contents_matchings(
+    rules: &[memoni::config::IgnoreContentRule],
     history: &mut ItemList,
     bookmarks: &mut ItemList,
 ) {
@@ -1334,13 +1334,13 @@ fn check_ignore_patterns_matchings(
             history.remove(id);
         }
         info!(
-            "removed {} items matching ignore patterns",
+            "removed {} items matching ignore_contents patterns",
             normal_ignored.len()
         );
     }
     if !pinned_ignored.is_empty() {
         warn!(
-            "{} pinned items matching ignore patterns, not removed",
+            "{} pinned items matching ignore_contents patterns, not removed",
             pinned_ignored.len()
         );
     }
@@ -1348,7 +1348,7 @@ fn check_ignore_patterns_matchings(
     let (bookmarked_ignored, pinned_bookmarked_ignored) = get_ignored_items(rules, bookmarks);
     if !bookmarked_ignored.is_empty() || !pinned_bookmarked_ignored.is_empty() {
         warn!(
-            "{} bookmarked items matching ignore patterns, not removed",
+            "{} bookmarked items matching ignore_contents patterns, not removed",
             bookmarked_ignored.len() + pinned_bookmarked_ignored.len()
         );
     }
@@ -1494,7 +1494,7 @@ fn format_pause_state(pause: Pause) -> String {
         .unwrap_or_else(|| "not paused".to_string())
 }
 
-fn get_ignored_items(rules: &[IgnorePatternRule], items: &ItemList) -> (Vec<u64>, Vec<u64>) {
+fn get_ignored_items(rules: &[IgnoreContentRule], items: &ItemList) -> (Vec<u64>, Vec<u64>) {
     let mut normal_ignored = vec![];
     let mut pinned_ignored = vec![];
 

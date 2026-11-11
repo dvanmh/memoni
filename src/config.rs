@@ -60,13 +60,13 @@ pub struct Config {
     #[serde(skip)]
     pub middle_click_delay_patterns: Vec<Regex>,
 
-    pub blocked_windows: Vec<String>,
+    pub ignore_windows: Vec<String>,
     #[serde(skip)]
-    pub blocked_window_patterns: Vec<Regex>,
+    pub ignore_window_rules: Vec<Regex>,
 
-    pub ignore_patterns: Vec<IgnorePatternConfig>,
+    pub ignore_contents: Vec<IgnoreContentConfig>,
     #[serde(skip)]
-    pub ignore_pattern_rules: Vec<IgnorePatternRule>,
+    pub ignore_content_rules: Vec<IgnoreContentRule>,
 
     pub switch_ime_command: Option<String>,
     pub ime_unicode_input_command: Option<String>,
@@ -95,29 +95,29 @@ impl Default for Config {
             app_paste_keymaps: Default::default(),
             middle_click_delay_windows: vec!["^[Ff]irefox".to_string()],
             middle_click_delay_patterns: vec![],
-            blocked_windows: vec![],
-            blocked_window_patterns: vec![],
+            ignore_windows: vec![],
+            ignore_window_rules: vec![],
 
             #[rustfmt::skip]
-            ignore_patterns: vec![
-                IgnorePatternConfig::complete_ignore(r#"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*"#),
-                IgnorePatternConfig::complete_ignore(r#"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"#),
-                IgnorePatternConfig::complete_ignore(r#"AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}"#),
-                IgnorePatternConfig::complete_ignore(r#"(?i)\bauthorization:\s*(?:bearer|basic|token)\s+\S{8,}"#),
-                IgnorePatternConfig::complete_ignore(r#"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{20,}=*"#),
-                IgnorePatternConfig::complete_ignore(r#"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b"#),
-                IgnorePatternConfig::complete_ignore(r#"AccountKey=[A-Za-z0-9+/=]{60,}"#),
-                IgnorePatternConfig::complete_ignore(r#"\bdo[opr]_v1_[a-f0-9]{64}\b"#),
-                IgnorePatternConfig::complete_ignore(r#"\bhv[sbr]\.[A-Za-z0-9_-]{24,}"#),
-                IgnorePatternConfig::complete_ignore(r#"\bgh[pousr]_[A-Za-z0-9]{36,255}\b"#),
-                IgnorePatternConfig::complete_ignore(r#"\bgithub_pat_[A-Za-z0-9_]{60,}"#),
-                IgnorePatternConfig::complete_ignore(r#"\bglpat-[A-Za-z0-9_-]{20,}"#),
-                IgnorePatternConfig::complete_ignore(r#"\bnpm_[A-Za-z0-9]{36}\b"#),
-                IgnorePatternConfig::complete_ignore(r#"\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}"#),
-                IgnorePatternConfig::complete_ignore(r#"\b(?:https?|ftps?|sftp|ssh|git\+https?|postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^/\s:@]+:[^/\s:@]+@\S+"#),
+            ignore_contents: vec![
+                IgnoreContentConfig::complete_ignore(r#"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*"#),
+                IgnoreContentConfig::complete_ignore(r#"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"#),
+                IgnoreContentConfig::complete_ignore(r#"AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}"#),
+                IgnoreContentConfig::complete_ignore(r#"(?i)\bauthorization:\s*(?:bearer|basic|token)\s+\S{8,}"#),
+                IgnoreContentConfig::complete_ignore(r#"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{20,}=*"#),
+                IgnoreContentConfig::complete_ignore(r#"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b"#),
+                IgnoreContentConfig::complete_ignore(r#"AccountKey=[A-Za-z0-9+/=]{60,}"#),
+                IgnoreContentConfig::complete_ignore(r#"\bdo[opr]_v1_[a-f0-9]{64}\b"#),
+                IgnoreContentConfig::complete_ignore(r#"\bhv[sbr]\.[A-Za-z0-9_-]{24,}"#),
+                IgnoreContentConfig::complete_ignore(r#"\bgh[pousr]_[A-Za-z0-9]{36,255}\b"#),
+                IgnoreContentConfig::complete_ignore(r#"\bgithub_pat_[A-Za-z0-9_]{60,}"#),
+                IgnoreContentConfig::complete_ignore(r#"\bglpat-[A-Za-z0-9_-]{20,}"#),
+                IgnoreContentConfig::complete_ignore(r#"\bnpm_[A-Za-z0-9]{36}\b"#),
+                IgnoreContentConfig::complete_ignore(r#"\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}"#),
+                IgnoreContentConfig::complete_ignore(r#"\b(?:https?|ftps?|sftp|ssh|git\+https?|postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^/\s:@]+:[^/\s:@]+@\S+"#),
             ],
 
-            ignore_pattern_rules: vec![],
+            ignore_content_rules: vec![],
             switch_ime_command: None,
             ime_unicode_input_command: None,
             ime_unicode_hex_input_command: None,
@@ -379,8 +379,8 @@ impl Config {
             });
 
         config.compile_middle_click_delay_patterns()?;
-        config.compile_blocked_window_patterns()?;
-        config.compile_ignore_patterns()?;
+        config.compile_ignore_window_rules()?;
+        config.compile_ignore_contents()?;
 
         debug!("config: {config:#?}");
         Ok(config)
@@ -399,38 +399,38 @@ impl Config {
         Ok(())
     }
 
-    fn compile_blocked_window_patterns(&mut self) -> Result<()> {
-        self.blocked_window_patterns = self
-            .blocked_windows
+    fn compile_ignore_window_rules(&mut self) -> Result<()> {
+        self.ignore_window_rules = self
+            .ignore_windows
             .iter()
             .map(|pattern| {
                 RegexBuilder::new(pattern)
                     .case_insensitive(true)
                     .build()
-                    .with_context(|| format!("invalid blocked_windows regex: {pattern:?}"))
+                    .with_context(|| format!("invalid ignore_windows regex: {pattern:?}"))
             })
             .collect::<Result<_>>()?;
         Ok(())
     }
 
-    fn compile_ignore_patterns(&mut self) -> Result<()> {
-        self.ignore_pattern_rules = self
-            .ignore_patterns
+    fn compile_ignore_contents(&mut self) -> Result<()> {
+        self.ignore_content_rules = self
+            .ignore_contents
             .iter()
             .map(|config| {
                 let regex = Regex::new(&config.pattern).with_context(|| {
-                    format!("invalid ignore_patterns regex: {:?}", config.pattern)
+                    format!("invalid ignore_contents regex: {:?}", config.pattern)
                 })?;
                 let ttl = match &config.ttl {
                     Some(g) => parse_duration_from_string(g)
                         .map_err(|err| {
                             debug!("invalid `ttl`: {err:?}");
-                            anyhow!("invalid ignore_patterns ttl: {:?}, expected duration like \"30m\", \"1h30m\" or \"90\"", config.ttl)
+                            anyhow!("invalid ignore_contents ttl: {:?}, expected duration like \"30m\", \"1h30m\" or \"90\"", config.ttl)
                         })?,
                     None => Duration::ZERO,
                 };
 
-                Ok(IgnorePatternRule {
+                Ok(IgnoreContentRule {
                     pattern: regex,
                     ttl,
                 })
@@ -647,12 +647,12 @@ impl Display for ParsePauseDurationError {
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct IgnorePatternConfig {
+pub struct IgnoreContentConfig {
     pub pattern: String,
     pub ttl: Option<String>,
 }
 
-impl IgnorePatternConfig {
+impl IgnoreContentConfig {
     fn complete_ignore(pattern: &str) -> Self {
         Self {
             pattern: pattern.to_string(),
@@ -662,7 +662,7 @@ impl IgnorePatternConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct IgnorePatternRule {
+pub struct IgnoreContentRule {
     pub pattern: Regex,
     pub ttl: Duration,
 }

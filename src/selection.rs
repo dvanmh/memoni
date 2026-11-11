@@ -251,12 +251,12 @@ impl<'a> Selection<'a> {
                                 }
                             }
 
-                            if is_owner_blocked(
+                            if is_owner_ignored(
                                 &self.window.conn,
                                 ev.owner,
-                                &self.config.blocked_window_patterns,
+                                &self.config.ignore_window_rules,
                             )? {
-                                info!("dropping selection from blocked owner {}", ev.owner);
+                                info!("dropping selection from ignored owner {}", ev.owner);
                                 break 'blk;
                             }
 
@@ -694,7 +694,7 @@ impl<'a> Selection<'a> {
 
         let ttl = plain_text.and_then(|text| {
             self.config
-                .ignore_pattern_rules
+                .ignore_content_rules
                 .iter()
                 .find(|rule| rule.pattern.is_match(text.as_ref()))
                 .map(|rule| rule.ttl)
@@ -717,7 +717,7 @@ impl<'a> Selection<'a> {
 
                 if is_zero_ttl {
                     info!(
-                        "duplicate selection item {insert_item_id} matches a zero-ttl ignore pattern, dropping it"
+                        "duplicate selection item {insert_item_id} matches a zero-ttl ignore_contents pattern, dropping it"
                     );
                     removed.push(previous_seen_item);
                 } else {
@@ -729,7 +729,7 @@ impl<'a> Selection<'a> {
         } else {
             if is_zero_ttl {
                 info!(
-                    "selection item {insert_item_id} matches a zero-ttl ignore pattern, dropping it"
+                    "selection item {insert_item_id} matches a zero-ttl ignore_contents pattern, dropping it"
                 );
             } else {
                 inserting = true;
@@ -864,7 +864,7 @@ impl Pause {
     }
 }
 
-fn is_owner_blocked(conn: &XCBConnection, owner: u32, patterns: &[Regex]) -> Result<bool> {
+fn is_owner_ignored(conn: &XCBConnection, owner: u32, patterns: &[Regex]) -> Result<bool> {
     if patterns.is_empty() {
         return Ok(false);
     }

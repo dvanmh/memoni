@@ -97,7 +97,7 @@ middle_click_delay_windows = ["^[Ff]irefox"]
 # selection owner window.
 #
 # default: []
-blocked_windows = ["(Not)?VerySecurePasswordManager"]
+ignore_windows = ["(Not)?VerySecurePasswordManager"]
 
 # Clipboard content patterns that are scheduled for deletion after a period
 #
@@ -141,7 +141,7 @@ blocked_windows = ["(Not)?VerySecurePasswordManager"]
 #     { pattern = '\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}' },
 #     { pattern = '\b(?:https?|ftps?|sftp|ssh|git\+https?|postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^/\s:@]+:[^/\s:@]+@\S+' },
 # ]
-ignore_patterns = [
+ignore_contents = [
     { pattern = 'secret_key_[a-z]{10,}', ttl = "5s" },
     { pattern = 'very_secret_key_[a-z]{20,}' },
 ]
