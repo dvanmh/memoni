@@ -251,7 +251,7 @@ impl<'a> Selection<'a> {
                                 }
                             }
 
-                            if is_owner_ignored(
+                            if is_window_ignored(
                                 &self.window.conn,
                                 ev.owner,
                                 &self.config.ignore_window_rules,
@@ -864,56 +864,29 @@ impl Pause {
     }
 }
 
-fn is_owner_ignored(conn: &XCBConnection, owner: u32, patterns: &[Regex]) -> Result<bool> {
+fn is_window_ignored(conn: &XCBConnection, owner: u32, patterns: &[Regex]) -> Result<bool> {
     if patterns.is_empty() {
         return Ok(false);
     }
 
-    let owner_class = get_x11_window_class(conn, owner)?;
-    if let Some((instance_name, class_name)) = owner_class {
-        return Ok(
-            if let Some(matched) = class_matches(patterns, &instance_name, &class_name) {
-                debug!("WM_CLASS {instance_name:?} {class_name:?} matched {matched:?}");
-                true
-            } else {
-                false
-            },
-        );
-    }
+    let Some((instance_name, class_name)) = get_x11_window_class(conn, owner)? else {
+        return Ok(false);
+    };
 
-    // Secondary windows that own selections (e.g. Qt's "... Selection Owner for
-    // <app>") don't carry a WM_CLASS. Fall back to the owning X client's resource
-    // id base: all windows from one connection share a fixed range of ids.
-    let root = conn.setup().roots[0].root;
-    let mask = conn.setup().resource_id_mask;
-    let owner_base = owner & !mask;
-
-    for window in conn.query_tree(root)?.reply()?.children {
-        if window & !mask != owner_base {
-            continue;
-        }
-
-        if let Ok(Some((instance_name, class_name))) = get_x11_window_class(conn, window)
-            && let Some(matched) = class_matches(patterns, &instance_name, &class_name)
-        {
-            debug!(
-                "WM_CLASS {instance_name:?} {class_name:?} (window {window:#x}) matched {matched:?}"
-            );
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    Ok(
+        if let Some(matched) = dual_matches(patterns, &instance_name, &class_name) {
+            debug!("WM_CLASS {instance_name:?} {class_name:?} matched {matched:?}");
+            true
+        } else {
+            false
+        },
+    )
 }
 
-fn class_matches<'a>(
-    patterns: &'a [Regex],
-    instance_name: &str,
-    class_name: &str,
-) -> Option<&'a Regex> {
+fn dual_matches<'a>(patterns: &'a [Regex], val_1: &str, val_2: &str) -> Option<&'a Regex> {
     patterns
         .iter()
-        .find(|p| p.is_match(instance_name) || p.is_match(class_name))
+        .find(|p| p.is_match(val_1) || p.is_match(val_2))
 }
 
 fn filter_mimes(mimes: HashMap<Atom, String>) -> HashMap<Atom, String> {
