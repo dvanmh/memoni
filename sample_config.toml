@@ -50,6 +50,7 @@ pause_auto_resume_after = "30m"
 #   "pointer"        - Follow the mouse pointer
 #   "active_pointer" - Follow pointer if it's visible and in the focused monitor
 #   "text_caret"     - Follow text caret of the currently focused input field
+#                      (uses AT-SPI by default; see `text_caret_command` to set an alternative)
 #
 # Example:
 # - `["active_pointer", "monitor"]` follows the pointer when possible,
