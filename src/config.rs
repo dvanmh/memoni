@@ -69,6 +69,7 @@ pub struct Config {
     pub ignore_process_rules: Vec<Regex>,
 
     pub ignore_contents: Vec<IgnoreContentConfig>,
+    pub ignore_contents_append: Vec<IgnoreContentConfig>,
     #[serde(skip)]
     pub ignore_content_rules: Vec<IgnoreContentRule>,
 
@@ -123,6 +124,7 @@ impl Default for Config {
                 IgnoreContentConfig::complete_ignore(r#"\b(?:https?|ftps?|sftp|ssh|git\+https?|postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^/\s:@]+:[^/\s:@]+@\S+"#),
             ],
 
+            ignore_contents_append: vec![],
             ignore_content_rules: vec![],
             switch_ime_command: None,
             ime_unicode_input_command: None,
@@ -438,6 +440,7 @@ impl Config {
         self.ignore_content_rules = self
             .ignore_contents
             .iter()
+            .chain(self.ignore_contents_append.iter())
             .map(|config| {
                 let regex = Regex::new(&config.pattern).with_context(|| {
                     format!("invalid ignore_contents regex: {:?}", config.pattern)

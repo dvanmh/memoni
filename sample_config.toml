@@ -124,8 +124,8 @@ ignore_processes = ["^ignored-cli"]
 #   - Pin it -> deletion is cancelled; unpinning later does not bring the expiry back.
 #   - Bookmark it -> the bookmark view keeps its own copy; the history entry still expires.
 #
-# Setting this replaces the built-in defaults; copy any patterns from the "default"
-# list below that you want to keep using.
+# Setting this replaces the built-in defaults (see "default" list below).
+# To add patterns while keeping the built-in defaults, use `ignore_contents_append`.
 #
 # WARNING: on startup, existing history items that match any new pattern (pinned items
 # are excluded) are deleted immediately. Existing bookmarks are not affected.
@@ -150,6 +150,17 @@ ignore_processes = ["^ignored-cli"]
 ignore_contents = [
     { pattern = 'secret_key_[a-z]{10,}', ttl = "5s" },
     { pattern = 'very_secret_key_[a-z]{20,}' },
+]
+
+# Extra content patterns appended after the effective `ignore_contents` list
+# (the built-in defaults, or the list you set in the config file).
+#
+# Same format as `ignore_contents`.
+#
+# default: []
+ignore_contents_append = [
+    { pattern = 'extra_secret_key_[a-z]{10,}', ttl = "5s" },
+    { pattern = 'extra_very_secret_key_[a-z]{20,}' },
 ]
 
 # Command to run when the IME switch keymap is pressed
