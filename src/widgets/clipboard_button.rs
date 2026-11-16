@@ -14,8 +14,8 @@ use egui::{
 
 // Very very long string causes egui to choke on first render,
 // even when we only display it on a single line with small width.
-const DISPLAY_LIMIT: usize = 1000;
-const SEARCH_MATCH_CONTEXT_LIMIT: usize = 12;
+const DISPLAY_CHAR_LIMIT: usize = 1000;
+const SEARCH_MATCH_CONTEXT_CHAR_LIMIT: usize = 12;
 
 const RECT_SEAM_MAX_GAP: f32 = 1.0;
 const RECT_SEAM_INSET: f32 = 0.5;
@@ -916,7 +916,7 @@ fn build_display_text(
     for (char_idx, (display, _, _, muted)) in
         iter_char_to_display_text(text, leading_ws_byte_end, trailing_ws_byte_start).enumerate()
     {
-        if char_idx > DISPLAY_LIMIT {
+        if char_idx > DISPLAY_CHAR_LIMIT {
             has_trailing = true;
             break;
         }
@@ -992,7 +992,7 @@ fn build_highlight(
             needs_override_text = false;
         }
 
-        if i > DISPLAY_LIMIT || hl_tracker.display_len == rendered_len {
+        if i > DISPLAY_CHAR_LIMIT || hl_tracker.display_len == rendered_len {
             text_processed_fully = false;
             break;
         }
@@ -1129,62 +1129,66 @@ fn build_override_text(
     leading_ws_byte_end: usize,
     trailing_ws_byte_start: usize,
 ) -> (Vec<Range<usize>>, DisplayText) {
-    let mut start = r#match.first().unwrap() as usize;
-    while !text.is_char_boundary(start) {
-        start -= 1;
-    }
-
-    for _ in 0..SEARCH_MATCH_CONTEXT_LIMIT {
-        if let Some(cb) = prev_char_boundary(text, start) {
-            start = cb;
-        } else {
-            break;
-        };
-    }
-
-    let tail = &text[start..];
-
-    let mut it = tail.char_indices();
-    let mut count = 0;
-    let mut end = tail.len();
-    for (i, _) in it.by_ref() {
-        if count == DISPLAY_LIMIT {
-            end = i;
-            break;
+    let match_byte_start = {
+        let mut s = r#match.first().expect("non-empty match") as usize;
+        while !text.is_char_boundary(s) {
+            s -= 1;
         }
-        count += 1;
-    }
 
-    let substr_end = start + end;
-    let display_start = if count < DISPLAY_LIMIT {
-        let mut display_start = 0;
-        while count < DISPLAY_LIMIT {
-            if let Some(cb) = prev_char_boundary(text, start) {
-                start = cb;
+        for _ in 0..SEARCH_MATCH_CONTEXT_CHAR_LIMIT {
+            if let Some(cb) = prev_char_boundary(text, s) {
+                s = cb;
             } else {
                 break;
             };
-
-            count += 1;
-            display_start += 1;
         }
-        display_start
-    } else {
-        0
+
+        s
     };
-    let substr = &text[start..substr_end];
 
-    let has_leading = start > 0;
-    let has_trailing = substr_end < text.len();
+    let mut subtext_char_count = 0;
 
-    let leading_ws_byte_end = leading_ws_byte_end.saturating_sub(start);
-    let trailing_ws_byte_start = trailing_ws_byte_start.saturating_sub(start);
+    let subtext_end = 'subtext_end: {
+        for (char_byte, _) in text[match_byte_start..].char_indices() {
+            if subtext_char_count >= DISPLAY_CHAR_LIMIT {
+                break 'subtext_end match_byte_start + char_byte;
+            }
+            subtext_char_count += 1;
+        }
+        text.len()
+    };
+
+    // Back-filling chars in case we need them to fill blank when the match is at the end of the text
+    let subtext_start = {
+        let mut start = match_byte_start;
+        while subtext_char_count < DISPLAY_CHAR_LIMIT
+            && let Some(cb) = prev_char_boundary(text, start)
+        {
+            start = cb;
+            subtext_char_count += 1;
+        }
+        start
+    };
+
+    let subtext = &text[subtext_start..subtext_end];
+    let has_leading = subtext_start > 0;
+    let has_trailing = subtext_end < text.len();
+
+    let leading_ws_byte_end = leading_ws_byte_end.saturating_sub(subtext_start);
+    let trailing_ws_byte_start = trailing_ws_byte_start.saturating_sub(subtext_start);
+
+    let display_byte_start = match_byte_start - subtext_start;
+    let mut display_start = 0;
 
     let mut job_builder = LayoutJobBuilder::new(default_text_format, muted_fg);
-    let mut hl_tracker = HighlightTracker::new(r#match, start);
+    let mut hl_tracker = HighlightTracker::new(r#match, subtext_start);
     for (display, c, byte_idx, muted) in
-        iter_char_to_display_text(substr, leading_ws_byte_end, trailing_ws_byte_start)
+        iter_char_to_display_text(subtext, leading_ws_byte_end, trailing_ws_byte_start)
     {
+        if byte_idx < display_byte_start {
+            display_start += display.chars().count();
+        }
+
         hl_tracker.track(c, byte_idx);
         job_builder.push(display, muted);
         hl_tracker.advance(display);
