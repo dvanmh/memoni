@@ -386,6 +386,13 @@ impl Config {
                 SelectionType::PRIMARY => config_set.primary,
             });
 
+        if selection_type != SelectionType::CLIPBOARD && !config.app_paste_keymaps.is_empty() {
+            return Err(anyhow!(
+                "Failed to parse config file\n    \
+                    `app_paste_keymaps` is only used with the CLIPBOARD selection and has no effect on PRIMARY; remove it or move it under the `[CLIPBOARD]` section"
+            ));
+        }
+
         config.compile_middle_click_delay_patterns()?;
         config.compile_ignore_window_rules()?;
         config.compile_ignore_process_rules()?;

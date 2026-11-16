@@ -189,24 +189,6 @@ ime_unicode_input_command = "busctl --user call org.fcitx.Fcitx5 /unicode org.fc
 ime_unicode_hex_input_command = "busctl --user call org.fcitx.Fcitx5 /unicode org.fcitx.Fcitx.Unicode1 TriggerUnicodeHex"
 
 
-# Application-specific paste keymaps for CLIPBOARD selection
-#
-# Map window instance/class names to one or more key strokes.
-# Each key stroke uses a character key (e.g., 'v') or number (keysym code), plus modifier.
-#
-# default: { key = 'v', modifier = "Control" } for all applications
-[app_paste_keymaps]
-
-# Single key stroke form
-Alacritty = { key = 'v', modifier = ["Control", "Shift"] }
-
-# Multiple key strokes will be pressed in sequence
-Emacs = [
-  { key = 'c', modifier = "Control" },
-  { key = 'y' }
-]
-
-
 # Layout and spacing
 [layout]
 
@@ -556,3 +538,24 @@ preview_background = "#00000000"
 
 # Keeps more items when using PRIMARY
 item_limit = 120
+
+
+# Application-specific paste keymaps
+#
+# Map window instance/class names to one or more key strokes.
+# Each key stroke uses a character key (e.g., 'v') or number (keysym code), plus modifier.
+#
+# Setting this field outside the [CLIPBOARD] section is rejected when running
+# the server for PRIMARY, since PRIMARY is pasted with a middle mouse click instead.
+#
+# default: { key = 'v', modifier = "Control" } for all applications
+[CLIPBOARD.app_paste_keymaps]
+
+# Single key stroke form
+Alacritty = { key = 'v', modifier = ["Control", "Shift"] }
+
+# Multiple key strokes will be pressed in sequence
+Emacs = [
+  { key = 'c', modifier = "Control" },
+  { key = 'y' }
+]
