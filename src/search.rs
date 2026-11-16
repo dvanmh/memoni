@@ -143,6 +143,7 @@ impl Search {
                     SearchMode::Fuzzy => frizbee::Matcher::from_query(
                         &self.query,
                         &frizbee::Config {
+                            max_typos: Some(2),
                             sort: frizbee::SortStrategy::IndexAsc,
                             ..frizbee::Config::default()
                         },
@@ -172,7 +173,7 @@ impl Search {
 
                         fields.push(FieldMatch {
                             tag: tag.clone(),
-                            base_score: f32::from(m.score),
+                            base_score: (m.score as usize + indices.len()) as f32,
                             indices: SearchMatchedBytes::single(indices),
                         });
 
@@ -368,6 +369,7 @@ impl SearchMatch {
     }
 }
 
+#[derive(Debug)]
 struct FieldMatch<'a> {
     tag: TextDataTag<'a>,
     base_score: f32,
