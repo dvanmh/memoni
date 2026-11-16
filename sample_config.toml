@@ -6,7 +6,7 @@ item_limit = 50
 # Draws a colored ribbon on the top-right corner of the window
 # Intended to distinguish CLIPBOARD and PRIMARY windows
 #
-# default: false
+# default: CLIPBOARD - false, PRIMARY - true
 show_ribbon = true
 
 # Hides the scroll bar when the mouse is not hovering over the item list

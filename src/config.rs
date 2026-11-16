@@ -353,6 +353,7 @@ fn default_primary_config() -> OptionalConfig {
             ..Default::default()
         }),
         window_position_mode: Some(vec![WindowPositionMode::Pointer]),
+        show_ribbon: Some(true),
         ..Default::default()
     }
 }
