@@ -856,7 +856,13 @@ fn build_paint_text(
         } else {
             0.0
         };
-    let highlight_rects = build_highlight_rects(&galley, &highlight, highlight_offset);
+    let highlight_rects = build_highlight_rects(
+        &galley,
+        &highlight,
+        &slice,
+        highlight_offset,
+        ellipsis.size().x,
+    );
 
     if slice.leading_ellipsis {
         append_job(&mut layout_job, &ellipsis.job);
@@ -1084,19 +1090,34 @@ fn galley_slice(
 
 // LayoutJob's TextFormat's `background` only highlights each section separatedly, and each
 // section can have different height and position, so we need to do the highlighting ourself.
-fn build_highlight_rects(galley: &Galley, highlight: &[Range<usize>], x_offset: f32) -> Vec<Rect> {
+fn build_highlight_rects(
+    galley: &Galley,
+    highlight: &[Range<usize>],
+    slice: &GalleySlice,
+    x_offset: f32,
+    trailing_ellipsis_width: f32,
+) -> Vec<Rect> {
     let placed_row = &galley.rows[0];
     let row = &placed_row.row;
     let row_top = placed_row.pos.y;
     let row_bottom = row_top + row.size.y;
     let glyph_len = row.glyphs.len();
 
+    let start_glyph_idx = slice.start_glyph_idx;
+    let end_glyph_idx = (slice.end_glyph_idx + 1).min(glyph_len);
+
     let mut rects = Vec::with_capacity(highlight.len());
     for &Range { start, end } in highlight {
-        if start >= glyph_len {
+        if start >= end_glyph_idx {
             break;
         }
-        let end = end.min(glyph_len);
+        if end <= start_glyph_idx {
+            break;
+        }
+
+        let highlight_overflowed = slice.trailing_ellipsis && end > end_glyph_idx;
+        let start = start.max(start_glyph_idx);
+        let end = end.min(end_glyph_idx);
 
         let x_min = placed_row.pos.x + row.glyphs[start].pos.x;
         let x_max = if end < glyph_len {
@@ -1105,10 +1126,17 @@ fn build_highlight_rects(galley: &Galley, highlight: &[Range<usize>], x_offset: 
             placed_row.pos.x + row.size.x
         };
 
-        rects.push(
-            Rect::from_min_max(egui::pos2(x_min, row_top), egui::pos2(x_max, row_bottom))
-                .translate(egui::vec2(x_offset, 0.0)),
-        );
+        let rect = {
+            let mut r =
+                Rect::from_min_max(egui::pos2(x_min, row_top), egui::pos2(x_max, row_bottom))
+                    .translate(egui::vec2(x_offset, 0.0));
+            if highlight_overflowed {
+                r.max.x += trailing_ellipsis_width;
+            }
+            r
+        };
+
+        rects.push(rect);
     }
 
     for i in 0..rects.len().saturating_sub(1) {
