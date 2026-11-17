@@ -1276,7 +1276,7 @@ impl<'a> Ui<'a> {
                     ui.add_space(layout.button_padding.x);
 
                     let mut layouter =
-                        |ui: &egui::Ui, s: &dyn TextBuffer, wrap_width: f32| -> Arc<Galley> {
+                        |ui: &egui::Ui, s: &dyn TextBuffer, _wrap_width: f32| -> Arc<Galley> {
                             let color = if state.is_query_valid(s.as_str()) {
                                 ui.visuals().text_color()
                             } else {
@@ -1287,7 +1287,7 @@ impl<'a> Ui<'a> {
                                 s.as_str().to_string(),
                                 egui::FontSelection::default().resolve(ui.style()),
                                 color,
-                                wrap_width,
+                                f32::INFINITY,
                             )
                         };
 
