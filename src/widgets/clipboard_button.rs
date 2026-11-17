@@ -33,9 +33,14 @@ pub struct ClipboardButton {
     underline_offset: f32,
     keyboard_hints: &'static [&'static str],
     keyboard_hint_foreground: Color32,
+    keyboard_hint_size: f32,
+    keyboard_hint_gap: f32,
     search_match_background: Color32,
     expiry_countdown_foreground: Color32,
     expiry_countdown_background: Color32,
+    expiry_countdown_size: f32,
+    expiry_countdown_gap: f32,
+    expiry_countdown_padding: Vec2,
 
     label_size: f32,
     label_color: Color32,
@@ -151,6 +156,18 @@ impl ClipboardButton {
     }
 
     #[inline]
+    pub fn keyboard_hint_size(mut self, keyboard_hint_size: f32) -> Self {
+        self.keyboard_hint_size = keyboard_hint_size;
+        self
+    }
+
+    #[inline]
+    pub fn keyboard_hint_gap(mut self, keyboard_hint_gap: f32) -> Self {
+        self.keyboard_hint_gap = keyboard_hint_gap;
+        self
+    }
+
+    #[inline]
     pub fn search_match_background(mut self, search_match_background: impl Into<Color32>) -> Self {
         self.search_match_background = search_match_background.into();
         self
@@ -171,6 +188,24 @@ impl ClipboardButton {
         expiry_countdown_background: impl Into<Color32>,
     ) -> Self {
         self.expiry_countdown_background = expiry_countdown_background.into();
+        self
+    }
+
+    #[inline]
+    pub fn expiry_countdown_size(mut self, expiry_countdown_size: f32) -> Self {
+        self.expiry_countdown_size = expiry_countdown_size;
+        self
+    }
+
+    #[inline]
+    pub fn expiry_countdown_gap(mut self, expiry_countdown_gap: f32) -> Self {
+        self.expiry_countdown_gap = expiry_countdown_gap;
+        self
+    }
+
+    #[inline]
+    pub fn expiry_countdown_padding(mut self, expiry_countdown_padding: impl Into<Vec2>) -> Self {
+        self.expiry_countdown_padding = expiry_countdown_padding.into();
         self
     }
 
@@ -281,11 +316,6 @@ impl ClipboardButton {
                 let matches = state.matches.as_ref();
                 let raw = state.raw.as_ref();
 
-                // TODO: make these configurable?
-                let hint_gap = 8.0;
-                let hint_size = 11.0;
-                let expiry_countdown_padding = Vec2::new(6.0, 2.0);
-
                 let padding = if self.preview.is_some()
                     && let Some(with_preview_padding) = self.with_preview_padding
                 {
@@ -306,16 +336,16 @@ impl ClipboardButton {
                 }
 
                 let keyboard_hint_width = *self.keyboard_hint_width.get_or_insert_with(|| {
-                    calc_keyboard_hint_width(ui, self.keyboard_hints, hint_size)
+                    calc_keyboard_hint_width(ui, self.keyboard_hints, self.keyboard_hint_size)
                 });
                 if keyboard_hint_width > 0.0 {
-                    text_width -= keyboard_hint_width + hint_gap;
+                    text_width -= keyboard_hint_width + self.keyboard_hint_gap;
                 }
 
                 let keyboard_hint_galley = keyboard_hint.map(|sh| {
                     WidgetText::RichText(Arc::new(
                         RichText::new(sh)
-                            .size(hint_size)
+                            .size(self.keyboard_hint_size)
                             .color(self.keyboard_hint_foreground),
                     ))
                     .into_galley(
@@ -330,15 +360,15 @@ impl ClipboardButton {
                     expiry_remaining
                 {
                     let expiry_countdown_width = if remaining > Duration::from_hours(1) {
-                        *self
-                            .long_expiry_countdown_width
-                            .get_or_insert_with(|| calc_expiry_countdown_width(ui, hint_size, true))
+                        *self.long_expiry_countdown_width.get_or_insert_with(|| {
+                            calc_expiry_countdown_width(ui, self.expiry_countdown_size, true)
+                        })
                     } else {
                         *self.short_expiry_countdown_width.get_or_insert_with(|| {
-                            calc_expiry_countdown_width(ui, hint_size, false)
+                            calc_expiry_countdown_width(ui, self.expiry_countdown_size, false)
                         })
-                    } + expiry_countdown_padding.x * 2.0;
-                    text_width -= expiry_countdown_width + hint_gap;
+                    } + self.expiry_countdown_padding.x * 2.0;
+                    text_width -= expiry_countdown_width + self.expiry_countdown_gap;
 
                     let s = if remaining > Duration::from_hours(100) {
                         fmt::from_fn(|f| format_duration(&Duration::from_hours(100), f)).to_string()
@@ -352,7 +382,7 @@ impl ClipboardButton {
                         Some(
                             WidgetText::RichText(Arc::new(
                                 RichText::new(s)
-                                    .size(hint_size)
+                                    .size(self.expiry_countdown_size)
                                     .color(self.expiry_countdown_foreground),
                             ))
                             .into_galley(
@@ -644,11 +674,11 @@ impl ClipboardButton {
                     cursor_x += text_width;
 
                     if let Some(galley) = expiry_countdown_galley {
-                        cursor_x += hint_gap;
+                        cursor_x += self.expiry_countdown_gap;
 
                         let bg_size = Vec2::new(
                             expiry_countdown_width,
-                            galley.rect.height() + expiry_countdown_padding.y * 2.0,
+                            galley.rect.height() + self.expiry_countdown_padding.y * 2.0,
                         );
                         let bg_pos = Pos2::new(cursor_x, rect.center().y - bg_size.y / 2.0);
                         let bg_rect = Rect::from_min_size(bg_pos, bg_size);
@@ -664,7 +694,7 @@ impl ClipboardButton {
                     }
 
                     if let Some(galley) = keyboard_hint_galley {
-                        cursor_x += hint_gap;
+                        cursor_x += self.keyboard_hint_gap;
                         let text_pos = Pos2::new(
                             cursor_x + keyboard_hint_width / 2.0 - galley.rect.width() / 2.0,
                             rect.center().y - galley.rect.height() / 2.0,

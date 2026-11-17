@@ -273,6 +273,21 @@ pending_keys_margin = { x = 10, y = 10 }
 # default: 5
 pending_keys_corner_radius = 2
 
+# Gap (px) between the text and the quick paste keyboard shortcut hint
+#
+# default: 8
+quick_paste_hint_gap = 6
+
+# Gap (px) between the text and the expiry countdown chip
+#
+# default: 8
+expiry_countdown_gap = 6
+
+# Padding (px) around the text inside the expiry countdown chip
+#
+# default: { x = 6, y = 2 }
+expiry_countdown_padding = { x = 8, y = 4 }
+
 # Size (px) of the pinned item indicator
 #
 # default: 4
@@ -354,6 +369,16 @@ size = 12.5
 #
 # default: 11
 secondary_size = 8
+
+# Quick paste keyboard shortcut hint text size (pt)
+#
+# default: 11
+quick_paste_hint_size = 9
+
+# Expiry countdown chip text size (pt)
+#
+# default: 11
+expiry_countdown_size = 9
 
 # Additional y offset applied to text layout
 #
