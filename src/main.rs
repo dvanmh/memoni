@@ -428,6 +428,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
     }
 
     let main_loop_result = (|| -> Result<()> {
+        let start_time = Instant::now();
         let mut state = ServerState {
             window_shown: false,
             pointer_button_press_count: 0,
@@ -839,6 +840,7 @@ fn server(args: ServerArgs, socket_path: &Path, display_id: Option<String>) -> R
                     });
                 }
 
+                input.egui_input.time = Some(start_time.elapsed().as_secs_f64());
                 let ui_flow = if window.is_win_placed_above_pointer() {
                     UiFlow::BottomToTop
                 } else {
