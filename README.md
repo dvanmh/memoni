@@ -62,14 +62,14 @@ Show the window centered in the focused monitor, next to the pointer, or next to
 <p align="center">
   <table>
     <tr>
-      <td align="center" width="50%">
+      <td align="center" valign="top" width="50%">
         <img src="./preview/monitor_placement.webp" alt="Opening and closing the window" />
         <br />
         <code>monitor</code>
         <br />
         <small>Centered in the focused monitor</small>
       </td>
-      <td align="center" width="50%">
+      <td align="center" valign="top" width="50%">
         <img src="./preview/pointer_placement.webp" alt="Moving the pointer and reopening the window, three times" />
         <br />
         <code>pointer</code>
@@ -78,14 +78,14 @@ Show the window centered in the focused monitor, next to the pointer, or next to
       </td>
     </tr>
     <tr>
-      <td align="center" width="50%">
+      <td align="center" valign="top" width="50%">
         <img src="./preview/active_pointer_placement.webp" alt="Reopening the window with the pointer visible, then with it hidden by typing" />
         <br />
         <code>active_pointer</code> → <code>monitor</code>
         <br />
         <small>Next to the pointer only when it's visible on the focused monitor, otherwise centered in the focused monitor</small>
       </td>
-      <td align="center" width="50%">
+      <td align="center" valign="top" width="50%">
         <img src="./preview/text_caret_placement.webp" alt="Opening the window in Neovim, LibreOffice Writer, and Emacs, following the caret after typing, then in Thunar, which has no focused input field" />
         <br />
         <code>text_caret</code> → <code>monitor</code>
